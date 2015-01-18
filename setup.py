@@ -8,5 +8,6 @@ setup(name = 'dxfasc',
       author = 'Nik Hartman',
       author_email = 'nik.hartman@gmail.com',
       url = 'https://github.com/nikhartman/dxfasc',
-      py_modules = ['dxfasc']
+      py_modules = ['dxfasc'],
+      install_requires['dxfgrabber']
       )
