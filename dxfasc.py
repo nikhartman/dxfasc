@@ -3,9 +3,37 @@
 #  There are additional functions for basic proximity effect corrections
 #  and ordering elements for cleaner writing
 
+import glob, itertools
 import numpy as np
 import re
 import dxfgrabber
+import matplotlib.pyplot as plt
+from matplotlib.collections import PolyCollection
+
+def get_layer_names(dxf):
+    """ get list of layer names. only lists layers that contain objects.
+        
+        this is to fix a problem with export from different versions of
+        adobe illustrator and autocad. """
+    layers = ['0'] # this empty layer is required
+    for i, ent in enumerate(dxf.entities):
+        if i==0: 
+            layers.append(ent.layer)
+            l = ent.layer
+        elif ent.layer != l:
+            layers.append(ent.layer)
+            l = ent.layer
+    return layers
+    
+def print_layer_names(filename):
+    """ print the names of the layers in a dxf file """
+
+    dxf = dxfgrabber.readfile(filename)
+
+    #  get layer names, create ASC layer names
+    layers = get_layer_names(dxf)
+    for i, l in enumerate(layers):
+        print '{0}:  {1}'.format(i, l)
 
 def map_layers(layers):
     """ create ASCII layer numbers automatically based on my usual conventions """
@@ -16,11 +44,11 @@ def map_layers(layers):
         elif 'align' in l.lower():
             new_layers.append(63)
         else:
-            m = re.search('_q(\d+)', l.lower())
+            m = re.search('q(\d+)', l.lower())
             if (m != None):
                 new_layers.append(int(m.group(1)))
             else: 
-                new_layers.append(i+10) #just give it a number that likely isn't being used
+                new_layers.append(i+50) #just give it a number that likely isn't being used
     return new_layers
 
 #  two functions to handle creating a list of polygon vertices
@@ -38,7 +66,7 @@ def get_vertices(dxf, layer):
             if ent.dxftype == 'POLYLINE':
                 verts.append(np.array(strip_z(ent.points)))
             else: 
-                print 'NOT A POLYLINE'
+                print 'NOT A POLYLINE -- LAYER: {0}'.format(layer)
                 #this should probably raise a proper error
     return np.array(verts)
 
@@ -138,7 +166,15 @@ def verts_block(verts):
     s = ''
     for v in verts:
         s += '{0:.4f} {1:.4f} \n'.format(v[0], v[1])
-    return s + '{0:.4f} {1:.4f} \n'.format(verts[0][0], verts[0][1])
+        
+    # some versions of dxf give different results here....
+    # add the first vertex to the end of the list, unless it is 
+    # already there
+    if '{0:.4f} {1:.4f} \n'.format(verts[0][0], verts[0][1]) == \
+        '{0:.4f} {1:.4f} \n'.format(verts[-1][0], verts[-1][1]):
+        return s
+    else:
+        return s + '{0:.4f} {1:.4f} \n'.format(verts[0][0], verts[0][1])
 
 def write_layer(f, verts, dose, layer, setDose=None):
     """ Writes all vertices in a layer to an ASCII file.
@@ -163,33 +199,99 @@ def write_layer(f, verts, dose, layer, setDose=None):
 
 #  one final function to rule them all...
 
-def convert_to_asc(file, doseMin, doseMax):
+def convert_to_asc(filename, doseMin, doseMax):
     """ load dxf file, scale dose data using simple proximity correction, 
         order elements by size/location, export ASC file in Raith format """
 
-    #  load dxf to dxfgrabber object
-    dxf = dxfgrabber.readfile(file)
-
-    #  get layer names, create ASC layer names
-    layers = dxf.layers.names()
-    new_layers = map_layers(layers)
-
-    f = open(file[:-4]+'.asc', 'w')
+    # some stuff to handle files or filelists
+    if type(filename)==type(''):
+        filename = [filename]
+    elif type(filename)==type([]):
+        pass
+    else:
+        print "Enter an string or list of strings"
     
-    for i in np.argsort(new_layers)[::-1]:
-        l = new_layers[i]
-        if l == 0:
-            continue
-        elif l == 63:
-            verts = get_vertices(dxf, layers[i])
-            com = polyUtility(verts, polyCOM)
-            ind_sorted = sort_by_position(com)
-            write_layer(f, verts[ind_sorted], np.ones(len(verts))*100.0, l)
-        else:
-            verts = get_vertices(dxf, layers[i])
-            com = polyUtility(verts, polyCOM)
-            dose = geometry_to_dose(verts, doseMin, doseMax)
-            ind_sorted = sort_by_position(com)
-            write_layer(f, verts[ind_sorted], dose[ind_sorted], l, setDose = doseMin)
-            
-    f.close()
+    for file in filename:
+        print 'working on file: {0}'.format(file)
+        #  load dxf to dxfgrabber object
+        dxf = dxfgrabber.readfile(file)
+
+        #  get layer names, create ASC layer names
+        layers = get_layer_names(dxf)
+        new_layers = map_layers(layers)
+
+        f = open(file[:-4]+'.asc', 'w')
+    
+        for i in np.argsort(new_layers)[::-1]:
+            l = new_layers[i]
+            if l == 0:
+                continue
+            elif l == 63:
+                verts = get_vertices(dxf, layers[i])
+                com = polyUtility(verts, polyCOM)
+                ind_sorted = sort_by_position(com)
+                write_layer(f, verts[ind_sorted], np.ones(len(verts))*100.0, l)
+            else:
+                verts = get_vertices(dxf, layers[i])
+                com = polyUtility(verts, polyCOM)
+                dose = geometry_to_dose(verts, doseMin, doseMax)
+                ind_sorted = sort_by_position(com)
+                write_layer(f, verts[ind_sorted], dose[ind_sorted], l, setDose = doseMin)
+        f.close()
+
+def plot_layer(filename, layername):
+    """ plot the given layer name to check the results """
+       
+    dxf = dxfgrabber.readfile(filename)
+    verts = get_vertices(dxf, layername)   
+    
+    fig = plt.figure(figsize=(10,8))
+    ax = fig.add_subplot(111)
+    polycol = PolyCollection(verts)
+    ax.add_collection(polycol)
+    ax.autoscale_view(True, True, True)
+    
+    lim = [ax.get_xlim(), ax.get_ylim()]
+    m = round(np.abs(lim).max())
+    ax.set_xlim(-m,m)
+    ax.set_ylim(-m,m)
+    ax.set_title('{0}'.format(layername.upper()))
+    
+    ax.grid()
+    plt.show()
+    
+def plot_sample(samplename, layer_id, size, save = False):
+    """ plot the entire device.  
+    
+        filelist -- a list of all of the relevant dxf files
+        layer_id -- something to search for in the layer names 
+        size -- a tuple giving (xlim, ylim) 
+        
+        this will save me from having to screengrab crap from Illustrator."""
+    
+    filelist = glob.glob(samplename+'_*.dxf')
+    
+    fig = plt.figure(figsize=(12,11))
+    ax = fig.add_subplot(111)
+    colors = itertools.cycle([plt.cm.Accent(i) for i in np.linspace(0, 1, 6)])
+    
+    for f in filelist:
+        dxf = dxfgrabber.readfile(f)
+        layers = get_layer_names(dxf)
+        for l in layers:
+            if layer_id.lower() in l.lower():
+                verts = get_vertices(dxf, l) 
+                polycol = PolyCollection(verts, facecolor=next(colors))
+                ax.add_collection(polycol) 
+    
+    xlim = round(size[0]/2.0)
+    ylim = round(size[1]/2.0)
+    ax.set_xlim(-xlim,xlim)
+    ax.set_ylim(-ylim,ylim)
+    ax.set_title('{0} {1}'.format(samplename, layer_id))
+    ax.grid()
+    
+    if save:
+        fig.savefig('{0}_{1}.png'.format(samplename.lower(),layer_id.lower()),
+                    dpi = 100)
+    plt.show()
