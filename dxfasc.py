@@ -33,41 +33,187 @@ def print_layer_names(filename):
     #  get layer names, create ASC layer names
     layers = get_layer_names(dxf)
     for i, l in enumerate(layers):
-        print '{0}:  {1}'.format(i, l)
+        print('{0}:  {1}'.format(i, l))
 
-def map_layers(layers):
-    """ create ASCII layer numbers automatically based on my usual conventions """
-    new_layers = []
-    for i, l in enumerate(layers):
-        if l == '0':
-            new_layers.append(0)
-        elif 'align' in l.lower():
-            new_layers.append(63)
-        else:
-            m = re.search('q(\d+)', l.lower())
-            if (m != None):
-                new_layers.append(int(m.group(1)))
-            else: 
-                new_layers.append(i+50) #just give it a number that likely isn't being used
-    return new_layers
+# def map_layers_old(layers):
+#     """ create ASCII layer numbers automatically based on my usual conventions """
+#     new_layers = []
+#     for i, l in enumerate(layers):
+#         if l == '0':
+#             new_layers.append(0)
+#         elif 'align' in l.lower():
+#             new_layers.append(63)
+#         else:
+#             m = re.search('q(\d+)', l.lower())
+#             if (m != None):
+#                 new_layers.append(int(m.group(1)))
+#             else: 
+#                 new_layers.append(i+50) #just give it a number that likely isn't being used
+#     return new_layers
 
-#  two functions to handle creating a list of polygon vertices
+#  functions to handle creating a list of polygon vertices
 #  from the dxf object
 
 def strip_z(tuple_list):
     """ removes the unnecessary z component from tuples """
     return [t[0:2] for t in tuple_list]
+    
+def contains_closing_point(verts):
+    # check that the polygon described by verts contains enough points to make a closed shape
+    epsilon = 1e-11
+    return np.all([abs(v)<epsilon for v in verts[0]-verts[-1]])
+
+def add_closing_point(verts):
+    if not contains_closing_point:
+        return np.vstack((verts, verts[0]))
+    else:
+        return verts
+
+def line2poly_const(ent):
+    """ convert lines of constant width to filled polygons """
+    
+    centers = np.array(strip_z(ent.points)) # center points of line
+    lower = np.zeros(centers.shape) # to hold vertices for lower parallel line
+    upper = np.zeros(centers.shape) # to hold vertices for upper parallel line
+    width = ent.const_width # line width
+
+    diff = np.roll(centers,-1, axis=0)-centers # vectors representing each line segement
+    phi = np.arctan2(diff[:,1],diff[:,0]) # angle each line segment makes with x-axis
+    m = np.tan(phi) # slope of each line segment to avoid div by 0
+    b_lower = centers[:,1]-m*centers[:,0]-0.5*width/np.cos(phi) # intercepts of lower parallel line
+    b_upper = centers[:,1]-m*centers[:,0]+0.5*width/np.cos(phi) # intercepts of upper parallel lines
+
+    # find all intersections, ignore endpoints
+    eps = 1e9
+    for i in range(1,ent.__len__()-1):
+        if np.abs(m[i])<eps:
+            a = m[i]
+            bl = b_lower[i]
+            bu = b_upper[i]
+        elif np.abs(m[i-1])<eps:
+            a = m[i-1]
+            bl = b_lower[i-1]
+            bu = b_upper[i-1]
+        lower[i,0] = ((b_lower[i]-b_lower[i-1])/(m[i-1]-m[i]))
+        lower[i,1] = a*((b_lower[i]-b_lower[i-1])/(m[i-1]-m[i]))+bl
+        upper[i,0] = ((b_upper[i]-b_upper[i-1])/(m[i-1]-m[i]))
+        upper[i,1] = a*((b_upper[i]-b_upper[i-1])/(m[i-1]-m[i]))+bu
+
+    # find endpoints
+    lower[0,0] = centers[0,0]+0.5*width*np.sin(phi[0])
+    lower[0,1] = centers[0,1]-0.5*width*np.cos(phi[0])
+    upper[0,0] = centers[0,0]-0.5*width*np.sin(phi[0])
+    upper[0,1] = centers[0,1]+0.5*width*np.cos(phi[0])
+
+    lower[-1,0] = centers[-1,0]+0.5*width*np.sin(phi[-2])
+    lower[-1,1] = centers[-1,1]-0.5*width*np.cos(phi[-2])
+    upper[-1,0] = centers[-1,0]-0.5*width*np.sin(phi[-2])
+    upper[-1,1] = centers[-1,1]+0.5*width*np.cos(phi[-2])
+
+    return np.vstack((lower, upper[::-1,:], [lower[0,:]]))
+
+def same_shape(v0,v1):
+    """ check if two lists of vertices contain the same points """
+    # get out of here immediately if the number of points is different
+    if v0.shape!=v1.shape:
+        return False
+    
+    # sort points in some known order
+    ind0 = sort_by_position(v0)
+    ind1 = sort_by_position(v1)
+    v0 = v0[ind0]
+    v1 = v1[ind1]
+    
+    # check distance between points
+    eps = 1e-3 # closer than 1nm is the same point
+    dist = np.linalg.norm(v0-v1, axis=1)
+    return np.all([d<eps for d in dist])
+
+def remove_duplicate_polygons(poly_list):
+    """ look through the list of polygons to see if any are repeated. print warning if they are. 
+        
+        returns: list of polygons with one of the duplicates removed """
+    
+    ind = []
+    for i in range(len(poly_list)):
+        for j in range(len(poly_list)):
+            if j>=i:
+                pass
+            else:
+                if same_shape(poly_list[i], poly_list[j]):
+                    print('DUPLICATE POLYGON REMOVED ({0})'.format(i))
+                    ind.append(i)
+    return np.delete(poly_list, ind)
+
+for ent in dxf.entities:
+    if ent.layer == 'fine_gates':
+        i+=1
+        if ent.dxftype == 'LWPOLYLINE':
+            
+            # logic to sort out what type of object ent is
+            closed = ent.is_closed # closed shape
+            if ent.width.__len__()==0:
+                width=False # not variable width
+            else:
+                width = not all([t<0.001 for tt in ent.width for t in tt]) # maybe variable width
+            cwidth = ent.const_width>0.001 # constant width
+            
+            if (closed and not (width or cwidth)): # closed polygons, lines have no width, easy
+                polyverts.append(np.array(strip_z(ent.points)))
+            elif (cwidth and not (closed or width)): # lines with constant width
+                polyverts.append(line2poly_const(ent))
+            elif (width and not (closed or cwidth)):
+                print('ENTITY ({0}). Lines of variable width not supported. DXFTYPE = LWPOLYLINE.'.format(i))
+            elif (not width and not cwidth and not closed):
+            # if closed, cwidth, and width are all false it's an unclosed polygon
+            # fix it and continue, print warning about polygon being closed automatically
+                print('UNCLOSED POLYGON FIXED ({0})'.format(i))
+                v = np.array(strip_z(ent.points))
+                v = add_closing_point(v)
+                polyverts.append(v)
+            else:
+                print('UKNOWN ENTITY ({0}). DXFTYPE = LWPOLYLINE'.format(i))
+                
+polyverts = remove_duplicate_polygons(polyverts)
 
 def get_vertices(dxf, layer):
     """ get list of vertices from dxf object """
     verts = []
+    i = 0
     for ent in dxf.entities:
         if ent.layer == layer:
+            i+=1
+            
             if ent.dxftype == 'POLYLINE':
                 verts.append(np.array(strip_z(ent.points)))
+                
+            if ent.dxftype == 'LWPOLYLINE':
+                # logic to sort out what type of object ent is
+                closed = ent.is_closed # closed shape
+                if ent.width.__len__()==0:
+                    width=False # not variable width
+                else:
+                    width = not all([t<0.001 for tt in ent.width for t in tt]) # maybe variable width
+                cwidth = ent.const_width>0.001 # constant width
+            
+                if (closed and not (width or cwidth)): # closed polygons, lines have no width, easy
+                    polyverts.append(np.array(strip_z(ent.points)))
+                elif (cwidth and not (closed or width)): # lines with constant width
+                    polyverts.append(line2poly_const(ent))
+                elif (width and not (closed or cwidth)):
+                    print('ENTITY ({0}). Lines of variable width not supported. DXFTYPE = LWPOLYLINE.'.format(i))
+                elif (not width and not cwidth and not closed):
+                    # if closed, cwidth, and width are all false it's an unclosed polygon
+                    # fix it and continue, print warning about polygon being closed automatically
+                    print('UNCLOSED POLYGON FIXED ({0})'.format(i))
+                    v = np.array(strip_z(ent.points))
+                    v = add_closing_point(v)
+                    polyverts.append(v)
+                else:
+                    print('UKNOWN ENTITY ({0}). DXFTYPE = LWPOLYLINE'.format(i))
+#                 
             else: 
-                print 'NOT A POLYLINE -- LAYER: {0}'.format(layer)
-                #this should probably raise a proper error
+                print('NOT A KNOWN TYPE ({0}) -- LAYER: {1}'.format(ent.dxftype, layer))
     return np.array(verts)
 
 #  a series of functions to perform simple operations on a single set/list
@@ -199,9 +345,9 @@ def write_layer(f, verts, dose, layer, setDose=None):
 
 #  one final function to rule them all...
 
-def convert_to_asc(filename, doseMin, doseMax):
+def convert_to_asc(filename, doseMin, doseMax, map_layers):
     """ load dxf file, scale dose data using simple proximity correction, 
-        order elements by size/location, export ASC file in Raith format """
+        order elements by size/location, export ASC file in Raith format. """
 
     # some stuff to handle files or filelists
     if type(filename)==type(''):
@@ -209,15 +355,16 @@ def convert_to_asc(filename, doseMin, doseMax):
     elif type(filename)==type([]):
         pass
     else:
-        print "Enter an string or list of strings"
+        print("Enter an string or list of strings")
     
     for file in filename:
-        print 'working on file: {0}'.format(file)
+        print('working on file: {0}'.format(file))
         #  load dxf to dxfgrabber object
         dxf = dxfgrabber.readfile(file)
 
         #  get layer names, create ASC layer names
         layers = get_layer_names(dxf)
+        # pick a map_layers function based on whatever you're current conventions are
         new_layers = map_layers(layers)
 
         f = open(file[:-4]+'.asc', 'w')
