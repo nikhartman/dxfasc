@@ -145,37 +145,6 @@ def remove_duplicate_polygons(poly_list):
                     ind.append(i)
     return np.delete(poly_list, ind)
 
-for ent in dxf.entities:
-    if ent.layer == 'fine_gates':
-        i+=1
-        if ent.dxftype == 'LWPOLYLINE':
-            
-            # logic to sort out what type of object ent is
-            closed = ent.is_closed # closed shape
-            if ent.width.__len__()==0:
-                width=False # not variable width
-            else:
-                width = not all([t<0.001 for tt in ent.width for t in tt]) # maybe variable width
-            cwidth = ent.const_width>0.001 # constant width
-            
-            if (closed and not (width or cwidth)): # closed polygons, lines have no width, easy
-                polyverts.append(np.array(strip_z(ent.points)))
-            elif (cwidth and not (closed or width)): # lines with constant width
-                polyverts.append(line2poly_const(ent))
-            elif (width and not (closed or cwidth)):
-                print('ENTITY ({0}). Lines of variable width not supported. DXFTYPE = LWPOLYLINE.'.format(i))
-            elif (not width and not cwidth and not closed):
-            # if closed, cwidth, and width are all false it's an unclosed polygon
-            # fix it and continue, print warning about polygon being closed automatically
-                print('UNCLOSED POLYGON FIXED ({0})'.format(i))
-                v = np.array(strip_z(ent.points))
-                v = add_closing_point(v)
-                polyverts.append(v)
-            else:
-                print('UKNOWN ENTITY ({0}). DXFTYPE = LWPOLYLINE'.format(i))
-                
-polyverts = remove_duplicate_polygons(polyverts)
-
 def get_vertices(dxf, layer):
     """ get list of vertices from dxf object """
     verts = []
@@ -197,9 +166,9 @@ def get_vertices(dxf, layer):
                 cwidth = ent.const_width>0.001 # constant width
             
                 if (closed and not (width or cwidth)): # closed polygons, lines have no width, easy
-                    polyverts.append(np.array(strip_z(ent.points)))
+                    verts.append(np.array(strip_z(ent.points)))
                 elif (cwidth and not (closed or width)): # lines with constant width
-                    polyverts.append(line2poly_const(ent))
+                    verts.append(line2poly_const(ent))
                 elif (width and not (closed or cwidth)):
                     print('ENTITY ({0}). Lines of variable width not supported. DXFTYPE = LWPOLYLINE.'.format(i))
                 elif (not width and not cwidth and not closed):
@@ -208,13 +177,13 @@ def get_vertices(dxf, layer):
                     print('UNCLOSED POLYGON FIXED ({0})'.format(i))
                     v = np.array(strip_z(ent.points))
                     v = add_closing_point(v)
-                    polyverts.append(v)
+                    verts.append(v)
                 else:
                     print('UKNOWN ENTITY ({0}). DXFTYPE = LWPOLYLINE'.format(i))
 #                 
             else: 
                 print('NOT A KNOWN TYPE ({0}) -- LAYER: {1}'.format(ent.dxftype, layer))
-    return np.array(verts)
+    return remove_duplicate_polygons(verts)
 
 #  a series of functions to perform simple operations on a single set/list
 #  of polygon vertices
