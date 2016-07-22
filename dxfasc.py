@@ -12,6 +12,10 @@ import dxfgrabber
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 
+##############################################
+### Functions for dealing with layer names ###
+##############################################
+
 def get_layer_names(dxf):
 
     """ Get list of layer names. Only lists layers that contain objects.
@@ -40,7 +44,10 @@ def get_layer_names(dxf):
 
 def print_layer_names(filename):
     """ Print all layers in a DXF file that contain artwork. Layer 0 is added 
-        as an empty layer. """
+        as an empty layer. 
+        
+        Args: 
+            filename (str): name of DXF file """
 
     dxf = dxfgrabber.readfile(filename)
 
@@ -48,8 +55,9 @@ def print_layer_names(filename):
     for i, l in enumerate(layers):
         print('{0}:  {1}'.format(i, l))
 
-#  functions to handle creating a list of polygon vertices
-#  from the dxf object
+##################################################################################
+### Functions to normalize a list of DXF shapes into a standard polygon format ###
+##################################################################################
 
 def strip_z(tuple_list):
     """ Removes the unnecessary z component from tuples. Specifically a problem
@@ -74,21 +82,97 @@ def contains_closing_point(verts):
         
     eps = 1e-11 # assuming this is roughly the floating point accuracy
     return np.all([abs(v)<eps for v in verts[0]-verts[-1]])
-
-def add_closing_point(verts):
-    """ Checks if the polygon described by verts contains a closing point.
-        If it does not, the first point of the polygon is added as a closing point. 
+        
+def close_all_polygons(poly_list, warnings = True):
+    """ Go through poly_list and look for polygons that are not closed
+        (first point the same as last point). 
         
         Args:
-            verts (list): a list of vertices in the form np.array([x,y]) """
+            poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons
+        Kwargs:
+            warnings (bool): True if you want warnings to print to the terminal
         
-    if not contains_closing_point:
-        return np.vstack((verts, verts[0]))
-    else:
-        return verts
+        returns: list of polygons with one of the duplicates removed """
+
+    for i in range(len(poly_list)):
+        if not contains_closing_point(poly_list[i]):
+            poly_list[i] = np.vstack((poly_list[i], poly_list[i][0]))
+            if warnings:
+                print('POLYGON CLOSED ({0})'.format(i))
+
+    return poly_list
+
+def same_shape(verts0,verts1):
+    """ Check if two lists of vertices contain the same points. 
+    
+        Args:
+            verts0 (list): list of (x,y) vertices for polygon 0
+            verts1 (list): list of (x,y) vertices for polygon 1
+            
+        Returns: 
+            bool: True if verts0 and vert1 describe the same polygon """
+            
+    # get out of here immediately if the number of points is different
+    if verts0.shape!=verts1.shape:
+        return False
+    
+    # sort points in some known order
+    ind0 = sort_by_position(verts0)
+    ind1 = sort_by_position(verts1)
+    verts0 = verts0[ind0]
+    verts1 = verts1[ind1]
+    
+    # check distance between points
+    eps = 1e-3 # closer than 1nm is the same point
+    dist = np.linalg.norm(verts0-verts1, axis=1)
+    return np.all([d<eps for d in dist])
+
+def remove_duplicate_polygons(poly_list, warnings=True):
+    """ Look through the list of polygons to see if any are repeated. Print warning if they are. 
+        
+        Args:
+            poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons
+        Kwargs:
+            warnings (bool): True if you want warnings to print to the terminal
+            
+        Returns: 
+            list: modified poly_list with duplicates removed """
+    
+    ind = []
+    for i in range(len(poly_list)):
+        for j in range(len(poly_list)):
+            if j>=i:
+                pass
+            else:
+                if same_shape(poly_list[i], poly_list[j]):
+                    if warnings:
+                        print('DUPLICATE POLYGON REMOVED ({0})'.format(i))
+                    ind.append(i)
+    return np.delete(poly_list, ind)
+    
+def normalize_polygon_orientation(poly_list):
+    """ Make sure all polygons have their vertices listed in counter-clockwise order.
+    
+        Args:
+            poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons
+            
+        Returns: 
+            list: modified poly_list with properly rotated polygons """
+            
+    for i in range(len(poly_list)):
+        if polyArea(poly_list[i])<0:
+            poly_list[i] = poly_list[i][::-1]
+        
+    return poly_list
 
 def line2poly_const(ent):
-    """ convert lines of constant width to filled polygons """
+    """ Convert lines of constant width to filled polygons. 
+    
+        Args:
+            ent (dxfgrabber entity): an object representing a single line in the DXF pattern
+        Returns:
+            list (verts): a list of vertices defining the polygon that is equivalent to the 
+                line of constant width. Vertices are in the form [np.array([x,y])] """
     
     centers = np.array(strip_z(ent.points)) # center points of line
     lower = np.zeros(centers.shape) # to hold vertices for lower parallel line
@@ -129,56 +213,6 @@ def line2poly_const(ent):
     upper[-1,1] = centers[-1,1]+0.5*width*np.cos(phi[-2])
 
     return np.vstack((lower, upper[::-1,:], [lower[0,:]]))
-
-def same_shape(v0,v1):
-    """ check if two lists of vertices contain the same points """
-    # get out of here immediately if the number of points is different
-    if v0.shape!=v1.shape:
-        return False
-    
-    # sort points in some known order
-    ind0 = sort_by_position(v0)
-    ind1 = sort_by_position(v1)
-    v0 = v0[ind0]
-    v1 = v1[ind1]
-    
-    # check distance between points
-    eps = 1e-3 # closer than 1nm is the same point
-    dist = np.linalg.norm(v0-v1, axis=1)
-    return np.all([d<eps for d in dist])
-
-def remove_duplicate_polygons(poly_list, warnings=True):
-    """ look through the list of polygons to see if any are repeated. print warning if they are. 
-        
-        returns: list of polygons with one of the duplicates removed """
-    
-    ind = []
-    for i in range(len(poly_list)):
-        for j in range(len(poly_list)):
-            if j>=i:
-                pass
-            else:
-                if same_shape(poly_list[i], poly_list[j]):
-                    if warnings:
-                        print('DUPLICATE POLYGON REMOVED ({0})'.format(i))
-                    ind.append(i)
-    return np.delete(poly_list, ind)
-    
-def check_polygon_arrangement(poly_list):
-    """ look through the list of polygons to make sure they are closed and 
-        listed in a counter-clockwise order
-        
-        returns: list of polygons with one of the duplicates removed """
-    
-    eps = 1e-3 # closer than 1nm is the same point
-    for i in range(len(poly_list)):
-        dist = np.linalg.norm(poly_list[i][0]-poly_list[i][-1])
-        if dist>eps:
-            poly_list[i] = np.vstack((poly_list[i],poly_list[i][0]))
-        if polyArea(poly_list[i])<0:
-            poly_list[i] = poly_list[i][::-1]
-        
-    return poly_list
 
 def get_vertices(dxf, layers, warnings=True):
     """ Get list of vertices from dxf object. 
@@ -253,8 +287,9 @@ def get_vertices(dxf, layers, warnings=True):
     verts = check_polygon_arrangement(verts)
     return remove_duplicate_polygons(verts, warnings=warnings)
 
-#  a series of functions to perform simple operations on a single set/list
-#  of polygon vertices
+####################
+### Polygon math ###
+####################
 
 def polyArea(verts0):
     """ find area of a polygon that has vertices in a numpy array
@@ -286,71 +321,73 @@ def polyUtility(verts_array, polyFunc):
         polyFunc """
     return np.array([polyFunc(v) for v in verts_array])
     
-def all_polygon_COM(dxf, layers):
-    """ get center of mass for layers """
+# def all_polygon_COM(dxf, layers):
+#     """ get center of mass for layers """
+#     
+#     verts = get_vertices(layers)
+#             
+#     com = polyUtility(verts, polyCOM)
+#     area = np.abs(polyUtility(verts, polyArea))
+#     
+#     return np.array([(area*com[:,0]).sum(), (area*com[:,1]).sum()])/area.sum()
     
-    verts = get_vertices(layers)
-            
-    com = polyUtility(verts, polyCOM)
-    area = np.abs(polyUtility(verts, polyArea))
-    
-    return np.array([(area*com[:,0]).sum(), (area*com[:,1]).sum()])/area.sum()
-    
-def bounding_box(dxf, layers, origin='ignore'):
-    """ find bounding box and proper coordinates 
-    
-        inputs:
-            dxf -- dxfgrabber object
-            layers -- list of layers to include in calculations
-            origin -- where the (0,0) coordinate should be located 
-            
-        returns:
-            ll -- coordiate of lower left corner of drawing after shift
-            center -- coordinate of center point after shift
-            bsize -- size of smallest bounding box (nearest micron)
-            shift -- all coordinates must be shifted by this vector """
-    
-    if type(layers)==type(''):
-        layers = [layers]
-    elif type(layers)==type([]):
-        pass
-    else:
-        print("Layers should be a string or list of strings")
-        
-    verts = np.vstack(get_vertices(dxf, layers, warnings=False))
-
-    xmin = verts[:,0].min()
-    xmax = verts[:,0].max()
-    ymin = verts[:,1].min()
-    ymax = verts[:,1].max()
-    
-    ll = np.array([xmin, ymin])
-    ur = np.array([xmax, ymax])
-    center = np.array([xmin+xmax, ymin+ymax])/2.0
-    bsize = np.ceil(max(xmax-xmin, ymax-ymin))
-
-    if origin=='lower':
-        shift = (-1)*(center-bsize/2.0)
-        return ll+shift, ur+shift, center+shift, bsize, shift
-    elif origin=='center':
-        shift = (-1)*center
-        return ll+shift, ur+shift, center+shift, bsize, shift
-    else:
-        shift = np.array([0,0])
-        return ll, ur, center, bsize, shift
+# def bounding_box(dxf, layers, origin='ignore'): # this should be included in get_vertices
+#     """ Find bounding box and proper coordinates 
+#     
+#         Args:
+#             dxf: dxfgrabber object
+#             layers -- list of layers to include in calculations
+#             origin -- where the (0,0) coordinate should be located 
+#             
+#         Returns:
+#             ll (np.array): x,y coordiates of lower left corner of drawing after shift
+#             ur (np.array): x,y coordiates of upper right corner of drawing after shift
+#             center (np.array): x,y coordinates of center point after shift
+#             bsize (float): size of smallest bounding box (nearest micron)
+#             shift (np.array): all x,y coordinates must be shifted by this vector """
+#     
+#     if type(layers)==type(''):
+#         layers = [layers]
+#     elif type(layers)==type([]):
+#         pass
+#     else:
+#         print("Layers should be a string or list of strings")
+#         
+#     verts = np.vstack(get_vertices(dxf, layers, warnings=False))
+# 
+#     xmin = verts[:,0].min()
+#     xmax = verts[:,0].max()
+#     ymin = verts[:,1].min()
+#     ymax = verts[:,1].max()
+#     
+#     ll = np.array([xmin, ymin])
+#     ur = np.array([xmax, ymax])
+#     center = np.array([xmin+xmax, ymin+ymax])/2.0
+#     bsize = np.ceil(max(xmax-xmin, ymax-ymin))
+# 
+#     if origin=='lower':
+#         shift = (-1)*(center-bsize/2.0)
+#         return ll+shift, ur+shift, center+shift, bsize, shift
+#     elif origin=='center':
+#         shift = (-1)*center
+#         return ll+shift, ur+shift, center+shift, bsize, shift
+#     else:
+#         shift = np.array([0,0])
+#         return ll, ur, center, bsize, shift
         
 #  dose calculation
 
-def get_writefield(verts):
-    """ estimate the writefield size """
-    sizes = np.array([120, 500, 1000])
-    corners = sizes*np.sqrt(2)/2.0
-    dmax = 0
-    for polygon in verts:
-        for v in polygon:
-            d = np.hypot(v[0],v[1])
-            if (d > dmax): dmax = d
-    return sizes[(dmax > corners).argmin()]
+def get_writefield(poly_list):
+    """ Print the writefield size to the nearest micron.
+        
+        Args: 
+            poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons 
+        
+        Returns:
+            size (float): writefield size in microns 
+            center (float): center of writefield (x,y) """
+            
+    # put something here 
 
 # def geometry_to_dose(verts, doseMin, doseMax):
 #     """ takes an array of polygon vertices. returns and array of dose values calculated
@@ -386,9 +423,6 @@ def geometry_to_dose(verts, doseMin, doseMax):
     # everything under 280nm doseMin
     # what to do now.... something simpler
 
-
-#  sort polygons by size/location
-
 def sort_by_dose(dose, com):
     """ takes a list of doses and centers of mass for all polygons in a layer.
         returns a list of indices that sorts those two arrays (and the vertex array)
@@ -410,7 +444,9 @@ def sort_by_position(com):
     Y = -np.round(com/n)[:,1]*n
     return np.lexsort((X, Y))[::-1]
 
-#  two functions to write data in the proper ASCII format
+#####################################
+### ASC output for Raith software ###
+#####################################
 
 def verts_block_asc(verts):
     """ verticies to block of text """
@@ -448,7 +484,9 @@ def write_layer_asc(f, verts, dose, layer, setDose=None):
         f.write('1 {0:.3f} {1:d} \n'.format(d, layer))
         f.write(verts_block_asc(verts[i]) + '# \n')
 
-#### dc2 functions for the folk lab ####
+####################################
+### DC2 output for NPGS software ###
+####################################
 
 def write_header_dc2(f, ll, ur, layers):
     """ Write header for dc2 file. """
@@ -498,6 +536,52 @@ def verts_block_dc2(vert, color):
     for v in vert:
         block += '{0:.4f} {1:.4f} 0\r\n'.format(v[0]*8, v[1]*8)
     return block
+    
+##########################
+### Plotting functions ###
+##########################
+
+def plot_layers(filename, layers, size):
+    """ Plot the given layers. """
+       
+    dxf = dxfgrabber.readfile(filename)
+
+    
+# def plot_sample(samplename, layer_id, size, save = False):
+#     """ plot the entire device.  
+#     
+#         filelist -- a list of all of the relevant dxf files
+#         layer_id -- something to search for in the layer names 
+#         size -- a tuple giving (xlim, ylim) 
+#         
+#         this will save me from having to screengrab crap from Illustrator."""
+#     
+#     filelist = glob.glob(samplename+'_*.dxf')
+#     
+#     fig = plt.figure(figsize=(12,11))
+#     ax = fig.add_subplot(111)
+#     colors = itertools.cycle([plt.cm.Accent(i) for i in np.linspace(0, 1, 6)])
+#     
+#     for f in filelist:
+#         dxf = dxfgrabber.readfile(f)
+#         layers = get_layer_names(dxf)
+#         for l in layers:
+#             if layer_id.lower() in l.lower():
+#                 verts = get_vertices(dxf, l) 
+#                 polycol = PolyCollection(verts, facecolor=next(colors))
+#                 ax.add_collection(polycol) 
+#     
+#     xlim = round(size[0]/2.0)
+#     ylim = round(size[1]/2.0)
+#     ax.set_xlim(-xlim,xlim)
+#     ax.set_ylim(-ylim,ylim)
+#     ax.set_title('{0} {1}'.format(samplename, layer_id))
+#     ax.grid()
+#     
+#     if save:
+#         fig.savefig('{0}_{1}.png'.format(samplename.lower(),layer_id.lower()),
+#                     dpi = 100)
+#     plt.show()
 
 #### depreciated asc functions from the markovic lab ####
 
@@ -541,60 +625,3 @@ def convert_to_asc(filename, doseMin, doseMax, map_layers):
                 ind_sorted = sort_by_position(com)
                 write_layer_asc(f, verts[ind_sorted], dose[ind_sorted], l, setDose = doseMin)
         f.close()
-
-def plot_layer(filename, layername):
-    """ plot the given layer name to check the results """
-       
-    dxf = dxfgrabber.readfile(filename)
-    verts = get_vertices(dxf, layername)   
-    
-    fig = plt.figure(figsize=(10,8))
-    ax = fig.add_subplot(111)
-    polycol = PolyCollection(verts)
-    ax.add_collection(polycol)
-    ax.autoscale_view(True, True, True)
-    
-    lim = [ax.get_xlim(), ax.get_ylim()]
-    m = round(np.abs(lim).max())
-    ax.set_xlim(-m,m)
-    ax.set_ylim(-m,m)
-    ax.set_title('{0}'.format(layername.upper()))
-    
-    ax.grid()
-    plt.show()
-    
-def plot_sample(samplename, layer_id, size, save = False):
-    """ plot the entire device.  
-    
-        filelist -- a list of all of the relevant dxf files
-        layer_id -- something to search for in the layer names 
-        size -- a tuple giving (xlim, ylim) 
-        
-        this will save me from having to screengrab crap from Illustrator."""
-    
-    filelist = glob.glob(samplename+'_*.dxf')
-    
-    fig = plt.figure(figsize=(12,11))
-    ax = fig.add_subplot(111)
-    colors = itertools.cycle([plt.cm.Accent(i) for i in np.linspace(0, 1, 6)])
-    
-    for f in filelist:
-        dxf = dxfgrabber.readfile(f)
-        layers = get_layer_names(dxf)
-        for l in layers:
-            if layer_id.lower() in l.lower():
-                verts = get_vertices(dxf, l) 
-                polycol = PolyCollection(verts, facecolor=next(colors))
-                ax.add_collection(polycol) 
-    
-    xlim = round(size[0]/2.0)
-    ylim = round(size[1]/2.0)
-    ax.set_xlim(-xlim,xlim)
-    ax.set_ylim(-ylim,ylim)
-    ax.set_title('{0} {1}'.format(samplename, layer_id))
-    ax.grid()
-    
-    if save:
-        fig.savefig('{0}_{1}.png'.format(samplename.lower(),layer_id.lower()),
-                    dpi = 100)
-    plt.show()
