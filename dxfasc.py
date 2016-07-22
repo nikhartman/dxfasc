@@ -1,7 +1,9 @@
-#  This module is meant to convert DXF drawings to the ASCII format 
-#  required by the Raith ELPHY Quantum software. 
-#  There are additional functions for basic proximity effect corrections
-#  and ordering elements for cleaner writing
+""" This module offers basic support for converting DXF drawings to 
+    the ASCII formats supported by Raith and NPGS ebeam lithography software.
+    
+    The module has not been extensively tested. It may only work in a few use cases. 
+    
+    The package dxfgrabber is required for DXF read/write operations. """
 
 import glob, itertools
 import numpy as np
@@ -12,10 +14,18 @@ from matplotlib.collections import PolyCollection
 
 def get_layer_names(dxf):
 
-    """ get list of layer names. only lists layers that contain objects.
+    """ Get list of layer names. Only lists layers that contain objects.
+        Any artwork in layer 0 is ignored. Layer 0 however is added as an
+        empty layer in this list, as this is required for some versions of the
+        Raith software. 
         
-        this is to fix a problem with export from different versions of
-        adobe illustrator and autocad. """
+        All characters are converted to caps and spaces to _. 
+        
+        Args:
+            dxf (dxfgrabber object): dxfgrabber object r
+                efering to the drawing of interest 
+        Returns:
+            list (str): list of layer names """
         
     layers = ['0'] # this empty layer is required
     for i, ent in enumerate(dxf.entities):
@@ -23,13 +33,14 @@ def get_layer_names(dxf):
         l = ent.layer.upper().replace (" ", "_")
         
         if i==0: 
-            layers.append(l)
+            layers.append(l) # definitely add the first layer name
         elif l not in layers:
-            layers.append(l)
+            layers.append(l) # add the layer name if it is not already included. 
     return layers
-    
+
 def print_layer_names(filename):
-    """ print the names of the layers in a dxf file """
+    """ Print all layers in a DXF file that contain artwork. Layer 0 is added 
+        as an empty layer. """
 
     dxf = dxfgrabber.readfile(filename)
 
@@ -37,35 +48,40 @@ def print_layer_names(filename):
     for i, l in enumerate(layers):
         print('{0}:  {1}'.format(i, l))
 
-# def map_layers_old(layers):
-#     """ create ASCII layer numbers automatically based on my usual conventions """
-#     new_layers = []
-#     for i, l in enumerate(layers):
-#         if l == '0':
-#             new_layers.append(0)
-#         elif 'align' in l.lower():
-#             new_layers.append(63)
-#         else:
-#             m = re.search('q(\d+)', l.lower())
-#             if (m != None):
-#                 new_layers.append(int(m.group(1)))
-#             else: 
-#                 new_layers.append(i+50) #just give it a number that likely isn't being used
-#     return new_layers
-
 #  functions to handle creating a list of polygon vertices
 #  from the dxf object
 
 def strip_z(tuple_list):
-    """ removes the unnecessary z component from tuples """
+    """ Removes the unnecessary z component from tuples. Specifically a problem
+        with Adobe Illustrator imports. 
+        
+        Args:
+            tuple_list (list): a list of tuples in (x,y,z) or (x,y) form 
+
+        Returns:
+            list: a list of tuples in (x,y) form """
+        
     return [t[0:2] for t in tuple_list]
     
 def contains_closing_point(verts):
-    # check that the polygon described by verts contains enough points to make a closed shape
-    epsilon = 1e-11
-    return np.all([abs(v)<epsilon for v in verts[0]-verts[-1]])
+    """ Check that the polygon described by verts contains
+        a closing point.
+        
+        Args:
+            verts (list): a list of vertices in the form np.array([x,y])
+        Returns:
+            bool: True if verts contains a closing point. False otherwise. """
+        
+    eps = 1e-11 # assuming this is roughly the floating point accuracy
+    return np.all([abs(v)<eps for v in verts[0]-verts[-1]])
 
 def add_closing_point(verts):
+    """ Checks if the polygon described by verts contains a closing point.
+        If it does not, the first point of the polygon is added as a closing point. 
+        
+        Args:
+            verts (list): a list of vertices in the form np.array([x,y]) """
+        
     if not contains_closing_point:
         return np.vstack((verts, verts[0]))
     else:
