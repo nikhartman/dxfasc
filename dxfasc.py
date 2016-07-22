@@ -26,8 +26,7 @@ def get_layer_names(dxf):
         All characters are converted to caps and spaces to _. 
         
         Args:
-            dxf (dxfgrabber object): dxfgrabber object r
-                efering to the drawing of interest 
+            dxf (dxfgrabber object): dxfgrabber object refering to the drawing of interest 
         Returns:
             list (str): list of layer names """
         
@@ -150,11 +149,13 @@ def remove_duplicate_polygons(poly_list, warnings=True):
                     ind.append(i)
     return np.delete(poly_list, ind)
     
-def normalize_polygon_orientation(poly_list):
+def normalize_polygon_orientation(poly_list, warnings = True):
     """ Make sure all polygons have their vertices listed in counter-clockwise order.
     
         Args:
             poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons
+        Kwargs:
+            warnings (bool): True if you want warnings to print to the terminal
             
         Returns: 
             list: modified poly_list with properly rotated polygons """
@@ -219,7 +220,15 @@ def get_vertices(dxf, layers, warnings=True):
     
         This is certainly full of bugs. It has only been tested with Illustrator CS5 
         and AutoCAD 2015. There are many object types that are not supported. Ideally, something
-        useful will be printed to notify you about what is missing. """
+        useful will be printed to notify you about what is missing. 
+
+        Args:
+            dxf (dxfgrabber object): dxfgrabber object refering to the drawing of interest 
+            layers (str, list): string or list of strings defining 
+                which layers will be imported.
+                
+        Returns:
+            list: list of polygon vertices as 2D numpy arrarys. """
         
     # make sure layers is a list
     if type(layers)==type(''):
@@ -231,24 +240,28 @@ def get_vertices(dxf, layers, warnings=True):
         
     # get all layer names in dxf
     all_layers = get_layer_names(dxf)
-        
-        
-    # loop through layers
-    verts = []
+            
+    # loop through layers to create poly_list
+    poly_list = []
     i = 0
     for l in layers:
         layer = l.upper().replace(' ','_')
         
         if layer not in all_layers:
-            print('LAYER NOT FOUND IN DRAWING -- {0}'.format(l))
+            if warnings:
+                print('LAYER NOT FOUND IN DRAWING -- {0}'.format(l))
             continue
-            
+        if (layer=='0' or layer==0):
+            if warnings:
+                print('DO NOT USE LAYER 0 FOR DRAWINGS')
+            continue
+         
         for ent in dxf.entities:
             if ent.layer.upper().replace(' ', '_') == layer:
                 i+=1
             
                 if ent.dxftype == 'POLYLINE':
-                    verts.append(np.array(strip_z(ent.points)))
+                    poly_list.append(np.array(strip_z(ent.points)))
                 
                 if ent.dxftype == 'LWPOLYLINE':
             
@@ -261,47 +274,56 @@ def get_vertices(dxf, layers, warnings=True):
                     cwidth = ent.const_width>0.001 # constant width
             
                     if (closed and not (width or cwidth)): # closed polygons, lines have no width
-                        verts.append(np.array(strip_z(ent.points)))
+                        poly_list.append(np.array(strip_z(ent.points)))
                     elif (cwidth and not (closed or width)): # lines with constant width
-                        verts.append(line2poly_const(ent))
+                        poly_list.append(line2poly_const(ent))
                     elif (width and not (closed or cwidth)):
                         if warnings:
                             print('ENTITY ({0}). Lines of variable width not supported. DXFTYPE = LWPOLYLINE.'.format(i))
                     elif (not width and not cwidth and not closed):
                         # if closed, cwidth, and width are all false it's an unclosed polygon
-                        # fix it and continue, print warning about polygon being closed automatically
-                        if warnings:
-                            print('UNCLOSED POLYGON FIXED ({0})'.format(i))
-                        v = np.array(strip_z(ent.points))
-                        v = add_closing_point(v)
-                        verts.append(v)
+                        # add it to the list and fix it later
+                        poly_list.append(np.array(strip_z(ent.points)))
                     
                     else:
                         if warnings:
                             print('UKNOWN ENTITY ({0}). DXFTYPE = LWPOLYLINE'.format(i))
+                            
+                # add additional dxftypes here
                     
                 else:
                     if warnings:
                         print('NOT A KNOWN TYPE ({0}) -- LAYER: {1}'.format(ent.dxftype, layer))
-                    
-    verts = check_polygon_arrangement(verts)
-    return remove_duplicate_polygons(verts, warnings=warnings)
-
+    
+    poly_list = close_all_polygons(poly_list, warnings = True) # make sure all polygons are closed
+    poly_list = remove_duplicate_polygons(poly_list, warnings=True) # remove duplicates
+    poly_list = normalize_polygon_orientation(poly_list, warnings=True) # orient all polygons counter-clockwise
+    # order polygon lists such that the longest side, nearest to the lower left corner comes first
+    return poly_list
+    
 ####################
 ### Polygon math ###
 ####################
 
 def polyArea(verts0):
-    """ find area of a polygon that has vertices in a numpy array
-        verts = np.array([x0 y0], [x1 y1], ....) 
+    """ Find area of a polygon that has vertices in a numpy array
         
-        sign of the area tells if the polygon is clockwise or counter clockwise. """
+        Args:
+            verts (array): np.array([x0 y0], [x1 y1], ....) 
+        Returns:
+            float: Area of polygon. Sign gives orientation (<0 clockwise). """
+            
     verts1 = np.roll(verts0, -1, axis=0)
     return 0.5*np.sum(verts0[:,0]*verts1[:,1] - verts1[:,0]*verts0[:,1])
 
 def polyCOM(verts0):
-    """ find center of mass of a polygon that has vertices in a numpy array
-        verts = np.array([x0 y0], [x1 y1], ....) """
+    """ Find center of mass of a polygon that has vertices in a numpy array
+    
+        Args:
+            verts (array): np.array([x0 y0], [x1 y1], ....) 
+        Returns:
+            array: np.array([x_com, y_com])"""
+            
     A = 1/(6*polyArea(verts0))
     verts1 = np.roll(verts0, -1, axis=0)
     C = verts0[:,0]*verts1[:,1] - verts1[:,0]*verts0[:,1]
@@ -310,16 +332,28 @@ def polyCOM(verts0):
     return A*np.array([X, Y])
 
 def polyPerimeter(verts0):
-    """ find perimeter of a polygon that has vertices in a numpy array
-        verts = np.array([x0 y0], [x1 y1], ....) """
+    """ Find perimeter length of a polygon that has vertices in a numpy array.
+    
+        Args:
+            verts (array): np.array([x0 y0], [x1 y1], ....) 
+        Returns:
+            float: length of the polygon perimenter. """
+            
     verts1 = np.roll(verts0, -1, axis=0)
     return np.sum(np.hypot(verts0[:,0] - verts1[:,0],verts0[:,1] - verts1[:,1]))
 
-def polyUtility(verts_array, polyFunc):
-    """ takes an array full of polygon vertices, as created by 
+def polyUtility(poly_list, polyFunc):
+    """ Takes an array full of polygon vertices, as created by 
         get_vertices, and returns an array full of values returned by 
-        polyFunc """
-    return np.array([polyFunc(v) for v in verts_array])
+        polyFunc
+        
+        Args:
+            poly_list (list): list of 2D numpy arrays defining the vertices of a number of polygons
+            polyFun (function): a function to apply to the list of polygons
+        Returns:
+            list: output of polyFunc for each polygon in poly_list """
+            
+    return np.array([polyFunc(v) for v in poly_list])
     
 # def all_polygon_COM(dxf, layers):
 #     """ get center of mass for layers """
