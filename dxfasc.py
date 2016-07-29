@@ -523,9 +523,9 @@ def bounding_box(dxf, layers, origin='ignore'):
 def geometry_to_dose(verts, doseMin, doseMax):
     """ calculate approximate width of polygon. scale ebeam dose accordingly. """
     
-    widths = 2*dxfasc.polyUtility(
-                        polyverts, dxfasc.polyArea)/dxfasc.polyUtility(
-                                            polyverts, dxfasc.polyPerimeter)
+    widths = 2*polyUtility(
+                        polyverts, polyArea)/polyUtility(
+                                            polyverts, polyPerimeter)
     
     # previous script gave everything over 2um doseMax
     # everything under 280nm doseMin
@@ -729,11 +729,11 @@ def write_alignment_layers_dc2(f, poly_list, layer_names):
     
         layer_num = j+1
         layer_txt = '21 {0} 0 0 0 0\r\n'.format(layer_num) # identify layer
-        layer_txt += dxfasc.verts_block_dc2(v, color) # add block for marker scan
+        layer_txt += verts_block_dc2(v, color) # add block for marker scan
 
         # define and add lines for cross inside box
-        com = dxfasc.polyCOM(v) # find center of box
-        side = np.sqrt(dxfasc.polyArea(v)) # length of one side of the box (or close enough)
+        com = polyCOM(v) # find center of box
+        side = np.sqrt(polyArea(v)) # length of one side of the box (or close enough)
         line0 = np.array([com-np.array([side/4.0,0]), # horizontal line
                           com+np.array([side/4.0,0])])
         line1 = np.array([com-np.array([0,side/4.0]), # vertical line
@@ -762,7 +762,7 @@ def save_alignment_info(file, poly_list):
             poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons """
             
     with open(file[:-4]+'_alignment-info.txt', 'w') as f:
-        com = dxfasc.polyUtility(poly_list, dxfasc.polyCOM)
+        com = polyUtility(poly_list, polyCOM)
         f.write('MARKER LOCATIONS: \r\n')
         f.write(str(np.round(com*1000)/1000))
         f.write('\r\nVECTOR FROM MARKER 0: \r\n')
@@ -807,14 +807,14 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
         
         #  load dxf to dxfgrabber object
         dxf = dxfgrabber.readfile(file)
-        all_layers = dxfasc.get_layer_names(dxf)
+        all_layers = get_layer_names(dxf)
         print('layers: ', all_layers)
         
-        ll, ur, center, bsize, shift = dxfasc.bounding_box(dxf, layers, origin=origin)
+        ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin=origin)
         
         f = open(file[:-4]+'.dc2', 'w')
         
-        dxfasc.write_header_dc2(f, ll, ur, layers)
+        write_header_dc2(f, ll, ur, layers)
     
         for i, l, c in zip(range(len(layers)), layers, colors):
             if l in all_layers:
@@ -824,10 +824,10 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
                     
                 elif 'ALIGN' in l:
                     # create list of objects for alignment marks
-                    verts = dxfasc.get_vertices(dxf, l)
+                    verts = get_vertices(dxf, l)
                     verts = np.array([v+shift for v in verts]) 
-                    com = dxfasc.polyUtility(verts, dxfasc.polyCOM)
-                    ind_sorted = dxfasc.sort_by_position(com)
+                    com = polyUtility(verts, polyCOM)
+                    ind_sorted = sort_by_position(com)
                     print(verts)
                     verts = verts[ind_sorted]
                     print(verts)
@@ -835,7 +835,7 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
                     # open file, write header
                     af = open(file[:-4]+'_{0}.dc2'.format(l), 'w')
                     align_layer_names = ['MARKER{0:d}'.format(i) for i in range(len(verts))]
-                    dxfasc.write_header_dc2(af, ll, ur, align_layer_names) # write alignment file header
+                    write_header_dc2(af, ll, ur, align_layer_names) # write alignment file header
                     write_alignment_layers_dc2(af, verts, align_layer_names)
                     af.close()
                     
@@ -844,18 +844,40 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
                     
                 else:
                     # this is normal 
-                    verts = dxfasc.get_vertices(dxf, l)
+                    verts = get_vertices(dxf, l)
                     verts = np.array([v+shift for v in verts])
-                    com = dxfasc.polyUtility(verts, dxfasc.polyCOM)
-                    ind_sorted = dxfasc.sort_by_position(com)
-                    dxfasc.write_layer_dc2(f, i+1, verts[ind_sorted], c)
+                    com = polyUtility(verts, polyCOM)
+                    ind_sorted = sort_by_position(com)
+                    write_layer_dc2(f, i+1, verts[ind_sorted], c)
         f.close()
     
 ##########################
 ### Plotting functions ###
 ##########################
 
-def plot_layers(ax, filename, layers, size):
+def plot_layers(ax, filename, layers, extent=None):
     """ Plot the layers from filename on ax with bounds given by size. """
        
     dxf = dxfgrabber.readfile(filename)
+
+    poly_dict = dxfasc.import_multiple_layers(dxf, layers, warnings=False)
+    ll, ur, center, bsize, shift = dxfasc.bounding_box(dxf, layers, origin='center')
+
+    pmin = np.floor(ll.min()/10)*10
+    pmax = np.ceil(ur.max()/10)*10
+    
+    colors = itertools.cycle([plt.cm.Accent(i) for i in np.linspace(0, 1, 6)])
+    for key, val in poly_dict.items():
+        verts = np.array([v+shift for v in val])
+        
+        polycol = PolyCollection(verts, facecolor=next(colors))
+        ax.add_collection(polycol)
+
+        if extent:
+            ax.set_xlim(extent[0], extent[1])
+            ax.set_ylim(extent[2], extent[3])
+        else:
+            ax.set_xlim(pmin, pmax)
+            ax.set_ylim(pmin, pmax)
+        
+        ax.grid('on')
