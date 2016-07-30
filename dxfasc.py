@@ -6,7 +6,7 @@
     The package dxfgrabber is required for DXF read/write operations. 
     
     to do:
-        0. implement some sort of dose scaling/proximity correction?
+        0. implement some sort of dose scaling/proximity correction? """
 
 import glob, itertools
 import numpy as np
