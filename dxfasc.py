@@ -860,8 +860,8 @@ def plot_layers(ax, filename, layers, extent=None):
        
     dxf = dxfgrabber.readfile(filename)
 
-    poly_dict = dxfasc.import_multiple_layers(dxf, layers, warnings=False)
-    ll, ur, center, bsize, shift = dxfasc.bounding_box(dxf, layers, origin='center')
+    poly_dict = import_multiple_layers(dxf, layers, warnings=False)
+    ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin='center')
 
     pmin = np.floor(ll.min()/10)*10
     pmax = np.ceil(ur.max()/10)*10
