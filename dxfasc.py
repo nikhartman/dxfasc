@@ -6,13 +6,7 @@
     The package dxfgrabber is required for DXF read/write operations. 
     
     to do:
-        0. fix all_layer_COM and bounding_box. 
-           get_vertices no longer supports multiple layers. add a function to stack vertices 
-           from dict into one big (N,2) array.
-        1. write plot layers function 
-        2. add function to order vertices starting with the longest side 
-           nearest to the lower left corner 
-        3. start working on generic export script """
+        0. implement some sort of dose scaling/proximity correction?
 
 import glob, itertools
 import numpy as np
@@ -416,25 +410,6 @@ def vstack_all_vertices(poly_dict):
         m = n
     return verts
     
-def all_polygon_COM(dxf, layers):
-    """ Get center of mass for polygons in all layers.
-    
-        Args:
-            dxf (dxfgrabber object): dxfgrabber object refering to the drawing of interest 
-            layers (str, list): string or list of strings defining 
-                which layers will be imported.
-                
-        Returns:
-            array: (x,y) coordinates of COM """
-    
-    poly_dict = import_multiple_layers(dxf, layers, warnings=False)
-#     verts = concatenate_vertices(poly_dict)
-            
-    com = polyUtility(verts, polyCOM)
-    area = np.abs(polyUtility(verts, polyArea))
-    
-    return np.array([(area*com[:,0]).sum(), (area*com[:,1]).sum()])/area.sum()
-    
 def bounding_box(dxf, layers, origin='ignore'):
     """ Find bounding box and proper coordinates 
     
@@ -534,18 +509,6 @@ def geometry_to_dose(verts, doseMin, doseMax):
 ######################################################
 ### Functions to define a write order for polygons ###
 ######################################################
-
-# def sort_by_dose(dose, com):
-#     """ takes a list of doses and centers of mass for all polygons in a layer.
-#         returns a list of indices that sorts those two arrays (and the vertex array)
-#         by dose then proximity to highest dose element. """
-#         
-#     #  sort by dose largest to smallest, then by distance from
-#     #  element with the largest dose (likely where the CNT is)
-#     
-#     center = com[np.argmax(dose)]
-#     dist = np.hypot(com[:,0]-center[0], com[:,1]-center[1])
-#     return np.lexsort((-dist, dose))[::-1]
 
 def sort_by_position(com):
     """ Sort polygons left to right, top to bottom, based on the location of
