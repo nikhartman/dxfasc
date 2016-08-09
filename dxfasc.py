@@ -446,7 +446,19 @@ def polyUtility(poly_list, polyFunc):
 #####################################
     
 def import_multiple_layers(dxf, layers, warn=True):
-
+    """ Import multiple layers from dxf drawing into a dictionary.
+    
+        Args:
+            dxf (dxfgrabber object): obejct representing the dxf drawing
+            layers (list): str or list of string containing names of layers to import
+            
+        Kwargs: 
+            warn (bool): print warnings
+            
+        Returns:
+            dict: dictionary containing layer names as keys and polygon lists
+                  as values """
+                  
     if type(layers)==type(''):
         layers = [layers]
     elif type(layers)==type([]):
@@ -468,6 +480,16 @@ def import_multiple_layers(dxf, layers, warn=True):
     return poly_dict
     
 def vstack_all_vertices(poly_dict):
+    """ All vertices in the layers contained in poly_dict are stacked to create one long
+        list of x,y coordinates.
+        
+        Args:
+            poly_dict (dict): dictionary containing layer names as keys and polygon lists
+                                as values
+        
+        Returns: 
+            np.ndarray: list of x,y coordinates """
+            
     verts = np.zeros((sum([len(v) for key, val in poly_dict.items() for v in val]),2))
     m = 0
     for key, val in poly_dict.items():
@@ -887,7 +909,13 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
 ##########################
 
 def plot_layers(ax, filename, layers, extent=None):
-    """ Plot the layers from filename on ax with bounds given by size. """
+    """ Plot the layers from filename on ax with bounds given by size. 
+    
+        Args:
+            ax (matplotlib.axes): axis on which the plot will appear
+            filename (dxf filename): name of file containing the drawing
+            layers (list): str or list of strings containing layer names
+            extent (list): [xmin, xmax, ymin, ymax] """
        
     dxf = dxfgrabber.readfile(filename)
 
