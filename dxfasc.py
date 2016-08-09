@@ -6,7 +6,9 @@
     The package dxfgrabber is required for DXF read/write operations. 
     
     to do:
-        0. implement some sort of dose scaling/proximity correction? """
+        0. implement some sort of dose scaling/proximity correction?
+        1. split lines into squarish polygons? might be a problem with 
+           segments not aligning with one another. need to think about this.  """
 
 import glob, itertools
 import numpy as np
@@ -14,6 +16,7 @@ import re
 import dxfgrabber
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
+import warnings
 
 ##############################################
 ### Functions for dealing with layer names ###
@@ -73,6 +76,33 @@ def strip_z(tuple_list):
         
     return [t[0:2] for t in tuple_list]
     
+def remove_duplicate_vertices(verts):
+    """ Look for duplicate points (closing point excluded) in lists of polygon vertices.
+    
+        Args:
+            verts (np.ndarray): x,y coordinates for each vertex of a polygon
+            
+        Returns 
+            np.ndarray: modified verts with duplicate points removed """
+            
+    idx = np.ones(verts.shape, dtype=bool)
+    idx[0:-1] = (np.abs(verts - np.roll(verts,-1, axis=0))>1e-3)[0:-1]
+    return verts[np.logical_or(idx[:,0],idx[:,1])]
+    
+def import_polygon_ent(ent):
+    """ A fucntion to import polygon entities from a drawing. Remove z coordinates, 
+        convert list to numpy array, remove any duplicate vertices.
+        
+        Args:
+            ent (dxfgrabber.entity): object representing the polygon
+        
+        Returns
+            np.ndarray: list of x,y coordinates for polygon vertices """
+            
+    pnts = ent.points
+    verts = np.array(strip_z(ent.points))
+    return remove_duplicate_vertices(verts)
+    
 def contains_closing_point(verts):
     """ Check that the polygon described by verts contains
         a closing point.
@@ -85,22 +115,22 @@ def contains_closing_point(verts):
     eps = 1e-11 # assuming this is roughly the floating point accuracy
     return np.all([abs(v)<eps for v in verts[0]-verts[-1]])
         
-def close_all_polygons(poly_list, warnings = True):
+def close_all_polygons(poly_list, warn = True):
     """ Go through poly_list and look for polygons that are not closed
         (first point the same as last point). 
         
         Args:
             poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons
         Kwargs:
-            warnings (bool): True if you want warnings to print to the terminal
+            warn (bool): True if you want warn to print to the terminal
         
         returns: list of polygons with one of the duplicates removed """
 
     for i in range(len(poly_list)):
         if not contains_closing_point(poly_list[i]):
             poly_list[i] = np.vstack((poly_list[i], poly_list[i][0]))
-            if warnings:
-                print('POLYGON CLOSED ({0})'.format(i))
+            # if warn:
+                # print('POLYGON CLOSED ({0})'.format(i))
 
     return poly_list
 
@@ -129,13 +159,13 @@ def same_shape(verts0,verts1):
     dist = np.linalg.norm(verts0-verts1, axis=1)
     return np.all([d<eps for d in dist])
 
-def remove_duplicate_polygons(poly_list, warnings=True):
+def remove_duplicate_polygons(poly_list, warn=True):
     """ Look through the list of polygons to see if any are repeated. Print warning if they are. 
         
         Args:
             poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons
         Kwargs:
-            warnings (bool): True if you want warnings to print to the terminal
+            warn (bool): True if you want warn to print to the terminal
             
         Returns: 
             list: modified poly_list with duplicates removed """
@@ -147,18 +177,18 @@ def remove_duplicate_polygons(poly_list, warnings=True):
                 pass
             else:
                 if same_shape(poly_list[i], poly_list[j]):
-                    if warnings:
+                    if warn:
                         print('DUPLICATE POLYGON REMOVED ({0})'.format(i))
                     ind.append(i)
     return [vert for i, vert in enumerate(poly_list) if i not in ind]
     
-def normalize_polygon_orientation(poly_list, warnings = True):
+def normalize_polygon_orientation(poly_list, warn = True):
     """ Make sure all polygons have their vertices listed in counter-clockwise order.
     
         Args:
             poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons
         Kwargs:
-            warnings (bool): True if you want warnings to print to the terminal
+            warn (bool): True if you want warn to print to the terminal
             
         Returns: 
             list: modified poly_list with properly rotated polygons """
@@ -170,6 +200,15 @@ def normalize_polygon_orientation(poly_list, warnings = True):
     return poly_list
     
 def rotate_to_longest_side(verts):
+    """ Rotate the order in which vertices are listed such that the two points defining
+        the longest side of the polygon come first. In NPGS, this vertex ordering defines
+        the direction in which the electron beam sweeps to fill the area.
+        
+        Args:
+            verts (list): a list of vertices in the form np.array([x,y])
+        Returns:
+            list: modified verts """
+            
     verts = verts[:-1] # remove closing point
 
     lower_left = np.array([verts[:,0].min(), verts[:,1].min()]) # lower left corner of bounding box
@@ -187,9 +226,16 @@ def rotate_to_longest_side(verts):
     return np.vstack((verts,verts[0]))
     
 def choose_scan_side(poly_list):
+    """ A function to wrap rotate_to_longest_side such that it can operate on a list.
+    
+        Args:
+            poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons
+        Returns:
+            list: modified poly_list """
+            
     return [rotate_to_longest_side(vert) for vert in poly_list]
 
-def line2poly_const(ent):
+def line2poly_const(ent, warn=True):
     """ Convert lines of constant width to filled polygons. 
     
         Args:
@@ -211,41 +257,59 @@ def line2poly_const(ent):
 
     # find all intersections, ignore endpoints
     eps = 1e9
-    for i in range(1,ent.__len__()-1):
-        if np.abs(m[i])<eps:
-            a = m[i]
-            bl = b_lower[i]
-            bu = b_upper[i]
-        elif np.abs(m[i-1])<eps:
-            a = m[i-1]
-            bl = b_lower[i-1]
-            bu = b_upper[i-1]
-        lower[i,0] = ((b_lower[i]-b_lower[i-1])/(m[i-1]-m[i]))
-        lower[i,1] = a*((b_lower[i]-b_lower[i-1])/(m[i-1]-m[i]))+bl
-        upper[i,0] = ((b_upper[i]-b_upper[i-1])/(m[i-1]-m[i]))
-        upper[i,1] = a*((b_upper[i]-b_upper[i-1])/(m[i-1]-m[i]))+bu
 
-    # find endpoints
-    lower[0,0] = centers[0,0]+0.5*width*np.sin(phi[0])
-    lower[0,1] = centers[0,1]-0.5*width*np.cos(phi[0])
-    upper[0,0] = centers[0,0]-0.5*width*np.sin(phi[0])
-    upper[0,1] = centers[0,1]+0.5*width*np.cos(phi[0])
+    with warnings.catch_warnings():
+        warnings.filterwarnings('error')
+    
+        try:
+            for i in range(1,ent.__len__()-1):
+                if np.abs(m[i])<eps:
+                    a = m[i]
+                    bl = b_lower[i]
+                    bu = b_upper[i]
+                elif np.abs(m[i-1])<eps:
+                    a = m[i-1]
+                    bl = b_lower[i-1]
+                    bu = b_upper[i-1]
+                lower[i,0] = ((b_lower[i]-b_lower[i-1])/(m[i-1]-m[i]))
+                lower[i,1] = a*((b_lower[i]-b_lower[i-1])/(m[i-1]-m[i]))+bl
+                upper[i,0] = ((b_upper[i]-b_upper[i-1])/(m[i-1]-m[i]))
+                upper[i,1] = a*((b_upper[i]-b_upper[i-1])/(m[i-1]-m[i]))+bu
 
-    lower[-1,0] = centers[-1,0]+0.5*width*np.sin(phi[-2])
-    lower[-1,1] = centers[-1,1]-0.5*width*np.cos(phi[-2])
-    upper[-1,0] = centers[-1,0]-0.5*width*np.sin(phi[-2])
-    upper[-1,1] = centers[-1,1]+0.5*width*np.cos(phi[-2])
+            # find endpoints
+            lower[0,0] = centers[0,0]+0.5*width*np.sin(phi[0])
+            lower[0,1] = centers[0,1]-0.5*width*np.cos(phi[0])
+            upper[0,0] = centers[0,0]-0.5*width*np.sin(phi[0])
+            upper[0,1] = centers[0,1]+0.5*width*np.cos(phi[0])
 
-    return np.vstack((lower, upper[::-1,:], [lower[0,:]]))
+            lower[-1,0] = centers[-1,0]+0.5*width*np.sin(phi[-2])
+            lower[-1,1] = centers[-1,1]-0.5*width*np.cos(phi[-2])
+            upper[-1,0] = centers[-1,0]-0.5*width*np.sin(phi[-2])
+            upper[-1,1] = centers[-1,1]+0.5*width*np.cos(phi[-2])
+
+            return np.vstack((lower, upper[::-1,:], [lower[0,:]]))
+    
+        except Warning:
+            if warn:
+                print('LINE CONVERSION FAILED. OMITTED FROM DC2.')
+            return None
+            
 
 def list_to_nparray_safe(poly_list):
-
+    """ Safe way to convert a list of polygon verticies to a 
+        numpy array full of numpy arrays. 
+        
+        Args:
+            poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons
+        Returns:
+            numpy.ndarray: poly_list converted to an ndarray full of ndarrays """
+            
     out = np.empty(len(poly_list), dtype=np.ndarray)
     for i in range(len(out)):
         out[i] = poly_list[i]
     return out
 
-def get_vertices(dxf, layer, warnings=True):
+def get_vertices(dxf, layer, warn=True):
     """ Get list of vertices from dxf object. 
     
         This is certainly full of bugs. It has only been tested with Illustrator CS5 
@@ -268,11 +332,11 @@ def get_vertices(dxf, layer, warnings=True):
     layer = layer.upper().replace(' ','_')
     
     if layer not in all_layers:
-        if warnings:
+        if warn:
             print('LAYER NOT FOUND IN DRAWING -- {0}'.format(layer))
         return poly_list
     elif (layer=='0' or layer==0):
-        if warnings:
+        if warn:
             print('DO NOT USE LAYER 0 FOR DRAWINGS')
         return poly_list
      
@@ -281,7 +345,7 @@ def get_vertices(dxf, layer, warnings=True):
             i+=1
         
             if ent.dxftype == 'POLYLINE':
-                poly_list.append(np.array(strip_z(ent.points)))
+                poly_list.append(import_polygon_ent(ent))
             
             if ent.dxftype == 'LWPOLYLINE':
         
@@ -294,30 +358,32 @@ def get_vertices(dxf, layer, warnings=True):
                 cwidth = ent.const_width>0.001 # constant width
         
                 if (closed and not (width or cwidth)): # closed polygons, lines have no width
-                    poly_list.append(np.array(strip_z(ent.points)))
+                    poly_list.append(import_polygon_ent(ent))
                 elif (cwidth and not (closed or width)): # lines with constant width
-                    poly_list.append(line2poly_const(ent))
+                    line = line2poly_const(ent)
+                    if line is not None:
+                        poly_list.append(line)
                 elif (width and not (closed or cwidth)):
-                    if warnings:
+                    if warn:
                         print('ENTITY ({0}). Lines of variable width not supported. DXFTYPE = LWPOLYLINE.'.format(i))
                 elif (not width and not cwidth and not closed):
                     # if closed, cwidth, and width are all false it's an unclosed polygon
                     # add it to the list and fix it later
-                    poly_list.append(np.array(strip_z(ent.points)))
+                    poly_list.append(import_polygon_ent(ent))
                 
                 else:
-                    if warnings:
+                    if warn:
                         print('UKNOWN ENTITY ({0}). DXFTYPE = LWPOLYLINE'.format(i))
                         
             # add additional dxftypes here
                 
             else:
-                if warnings:
+                if warn:
                     print('NOT A KNOWN TYPE ({0}) -- LAYER: {1}'.format(ent.dxftype, layer))
     
-    poly_list = close_all_polygons(poly_list, warnings=warnings) # make sure all polygons are closed
-    poly_list = remove_duplicate_polygons(poly_list, warnings=warnings) # remove duplicates
-    poly_list = normalize_polygon_orientation(poly_list, warnings=warnings) # orient all polygons counter-clockwise
+    poly_list = close_all_polygons(poly_list, warn=warn) # make sure all polygons are closed
+    poly_list = remove_duplicate_polygons(poly_list, warn=warn) # remove duplicates
+    poly_list = normalize_polygon_orientation(poly_list, warn=warn) # orient all polygons counter-clockwise
     poly_list = choose_scan_side(poly_list)
     return list_to_nparray_safe(poly_list)
     
@@ -379,7 +445,7 @@ def polyUtility(poly_list, polyFunc):
 ### Operations on multiple layers ###
 #####################################
     
-def import_multiple_layers(dxf, layers, warnings=True):
+def import_multiple_layers(dxf, layers, warn=True):
 
     if type(layers)==type(''):
         layers = [layers]
@@ -394,9 +460,9 @@ def import_multiple_layers(dxf, layers, warnings=True):
     poly_dict = {}
     for l in layers:
         if l in all_layers:
-            poly_dict[l] = get_vertices(dxf, l, warnings=warnings)
+            poly_dict[l] = get_vertices(dxf, l, warn=warn)
         else:
-            if warnings:
+            if warn:
                 print('LAYER: {0} NOT CONTAINED IN DXF'.format(l))
                 
     return poly_dict
@@ -426,7 +492,7 @@ def bounding_box(dxf, layers, origin='ignore'):
             shift (np.array): all x,y coordinates must be shifted by this vector """
     
     
-    poly_dict = import_multiple_layers(dxf, layers, warnings=False)
+    poly_dict = import_multiple_layers(dxf, layers, warn=False)
     verts = vstack_all_vertices(poly_dict)
 
     xmin = verts[:,0].min()
@@ -448,6 +514,10 @@ def bounding_box(dxf, layers, origin='ignore'):
     else:
         shift = np.array([0,0])
         return ll, ur, center, bsize, shift
+        
+##############################################
+### Calculations to determine dose scaling ###
+##############################################
 
 # def get_writefield(poly_list):
 #     """ Print the writefield size to the nearest micron. Similar to bounding_box, but
@@ -495,12 +565,12 @@ def bounding_box(dxf, layers, origin='ignore'):
 #     #  round to nearest multiple of 'resolution' because this method can't be very accurate
 #     return np.clip(np.round(np.array([m*x + b for x in data])/resolution)*resolution, doseMin, doseMax)
 
-def geometry_to_dose(verts, doseMin, doseMax):
-    """ calculate approximate width of polygon. scale ebeam dose accordingly. """
-    
-    widths = 2*polyUtility(
-                        polyverts, polyArea)/polyUtility(
-                                            polyverts, polyPerimeter)
+# def geometry_to_dose(verts, doseMin, doseMax):
+#     """ calculate approximate width of polygon. scale ebeam dose accordingly. """
+#     
+#     widths = 2*polyUtility(
+#                         polyverts, polyArea)/polyUtility(
+#                                             polyverts, polyPerimeter)
     
     # previous script gave everything over 2um doseMax
     # everything under 280nm doseMin
@@ -791,9 +861,7 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
                     verts = np.array([v+shift for v in verts]) 
                     com = polyUtility(verts, polyCOM)
                     ind_sorted = sort_by_position(com)
-                    print(verts)
                     verts = verts[ind_sorted]
-                    print(verts)
                     
                     # open file, write header
                     af = open(file[:-4]+'_{0}.dc2'.format(l), 'w')
@@ -823,7 +891,7 @@ def plot_layers(ax, filename, layers, extent=None):
        
     dxf = dxfgrabber.readfile(filename)
 
-    poly_dict = import_multiple_layers(dxf, layers, warnings=False)
+    poly_dict = import_multiple_layers(dxf, layers, warn=False)
     ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin='center')
 
     pmin = np.floor(ll.min()/10)*10
