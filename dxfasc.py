@@ -245,7 +245,7 @@ def line2poly_const(ent, warn=True):
             list (verts): a list of vertices defining the polygon that is equivalent to the 
                 line of constant width. Vertices are in the form [np.array([x,y])] """
     
-    centers = np.array(strip_z(ent.points)) # center points of line
+    centers = import_polygon_ent(ent) # center points of line
     lower = np.zeros(centers.shape) # to hold vertices for lower parallel line
     upper = np.zeros(centers.shape) # to hold vertices for upper parallel line
     width = ent.const_width # line width
@@ -295,6 +295,23 @@ def line2poly_const(ent, warn=True):
                 print('LINE CONVERSION FAILED. OMITTED FROM DC2.')
             return None
             
+def split_line2poly(verts):
+    """ take a n irregularly shaped polygon (created from a line entity) and split it 
+        into individual polygons each with 4 sides 
+        
+        Args:
+            verts (np.ndarray): list of vertices defining polygon
+        
+        Returns: 
+            list: list of np.ndarrays defining the vertices of each individual polygon """
+            
+    verts = verts[:-1] # drop closing point
+
+    n = int((verts.__len__()-2)/2) # number of resulting polygons
+    out = []
+    for i in range(n):
+        out.append(np.array([verts[i],verts[i+1],verts[-i-2],verts[-i-1],verts[i]]))
+    return out
 
 def list_to_nparray_safe(poly_list):
     """ Safe way to convert a list of polygon verticies to a 
@@ -363,7 +380,7 @@ def get_vertices(dxf, layer, warn=True):
                 elif (cwidth and not (closed or width)): # lines with constant width
                     line = line2poly_const(ent)
                     if line is not None:
-                        poly_list.append(line)
+                        poly_list += split_line2poly(line)
                 elif (width and not (closed or cwidth)):
                     if warn:
                         print('ENTITY ({0}). Lines of variable width not supported. DXFTYPE = LWPOLYLINE.'.format(i))
