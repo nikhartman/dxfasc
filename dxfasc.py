@@ -14,6 +14,7 @@ import glob, itertools
 import numpy as np
 import re
 import dxfgrabber
+import time
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 import warnings
@@ -112,7 +113,7 @@ def contains_closing_point(verts):
         Returns:
             bool: True if verts contains a closing point. False otherwise. """
         
-    eps = 1e-11 # assuming this is roughly the floating point accuracy
+    eps = 1e-9 # taking a guess at what accuracy is required
     return np.all([abs(v)<eps for v in verts[0]-verts[-1]])
         
 def close_all_polygons(poly_list, warn = True):
@@ -807,7 +808,7 @@ def write_alignment_layers_dc2(f, poly_list, layer_names):
                 layer_txt += '{0:.4f} {1:.4f} 0\r\n'.format(point[0]*8, point[1]*8)
         f.write(layer_txt)
     
-def save_alignment_info(file, poly_list):
+def save_alignment_info(file, layername, poly_list):
     """ Saves a text file with information about the manual alignment mark scans. NPGS
         needs to know the coordinates and vectors between them. A txt file is created
         containing this information. 
@@ -816,7 +817,7 @@ def save_alignment_info(file, poly_list):
             file (str): name of dxf file containing original drawing
             poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons """
             
-    with open(file[:-4]+'_alignment-info.txt', 'w') as f:
+    with open(file[:-4]+'_{0}.txt'.format(layername), 'w') as f:
         com = polyUtility(poly_list, polyCOM)
         f.write('MARKER LOCATIONS: \r\n')
         f.write(str(np.round(com*1000)/1000))
@@ -867,7 +868,7 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
         
         ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin=origin)
         
-        f = open(file[:-4]+'.dc2', 'w')
+        f = open(file[:-4]+'_{0}.dc2'.format(str(int(time.time()*1e6))[-11:]), 'w')
         
         write_header_dc2(f, ll, ur, layers)
     
@@ -893,7 +894,7 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
                     af.close()
                     
                     # record vectors pointing from alignment mark 0 to others
-                    save_alignment_info(file, verts)
+                    save_alignment_info(file, l, verts)
                     
                 else:
                     # this is normal 
