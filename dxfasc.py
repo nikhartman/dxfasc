@@ -1045,3 +1045,27 @@ def plot_layers(ax, filename, layers, extent=None):
             ax.set_ylim(pmin, pmax)
         
         ax.grid('on')
+        
+############################
+### Additional Utilities ###
+############################
+
+def estimate_writetime(filename, layer, dose, current):
+        """ Load dxf file(s), convert all objects to polygons, 
+        order elements by location, export dxf file.
+        
+        Args:
+            filename (str): str containing filename of dxf file
+            layer (str) -- layer name
+            dose (float) -- dose in uC/cm^2
+            current (float) -- beam current in pA
+                            
+        Returns: 
+            float: time to write patter in minutes """
+        
+        dxf = dxfgrabber.readfile(filename)
+        verts = get_vertices(dxf, layer)
+        total_area = polyUtility(verts, polyArea).sum() # areas are in um^2
+        
+        return (dose*(total_area*1e-8)/(current*1e-6))/60.0
+
