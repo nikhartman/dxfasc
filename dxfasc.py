@@ -19,6 +19,9 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 import warnings
 
+SMALLEST_SCALE = 5e-4 # distances smaller than this number are considered zero in most
+                      # calculations
+
 ##############################################
 ### Functions for dealing with layer names ###
 ##############################################
@@ -86,8 +89,9 @@ def remove_duplicate_vertices(verts):
         Returns 
             np.ndarray: modified verts with duplicate points removed """
             
+    eps = SMALLEST_SCALE 
     idx = np.ones(verts.shape, dtype=bool)
-    idx[0:-1] = (np.abs(verts - np.roll(verts,-1, axis=0))>1e-3)[0:-1]
+    idx[0:-1] = (np.abs(verts - np.roll(verts,-1, axis=0))>eps)[0:-1]
     return verts[np.logical_or(idx[:,0],idx[:,1])]
     
 def import_polygon_ent(ent):
@@ -113,7 +117,7 @@ def contains_closing_point(verts):
         Returns:
             bool: True if verts contains a closing point. False otherwise. """
         
-    eps = 1e-9 # taking a guess at what accuracy is required
+    eps = SMALLEST_SCALE # anything within 5A is the same point
     return np.all([abs(v)<eps for v in verts[0]-verts[-1]])
         
 def close_all_polygons(poly_list, warn = True):
@@ -156,7 +160,7 @@ def same_shape(verts0,verts1):
     verts1 = verts1[ind1]
     
     # check distance between points
-    eps = 1e-3 # closer than 1nm is the same point
+    eps = SMALLEST_SCALE # anything within 5A is the same point
     dist = np.linalg.norm(verts0-verts1, axis=1)
     return np.all([d<eps for d in dist])
 
@@ -217,7 +221,7 @@ def rotate_to_longest_side(verts):
     centers = 0.5*(verts+np.roll(verts,-1, axis=0)) # center point of each side
 
     max_length = side_lengths.max() # length of longest side
-    long_ind = np.abs(side_lengths - max_length) < 0.001 # find indices of all sides with this length
+    long_ind = np.abs(side_lengths - max_length) < SMALLEST_SCALE # find indices of all sides with this length
 
     c_to_ll = np.sqrt(np.sum((centers-lower_left)**2,axis=1)) # distance from center points to lower left corner
     c_to_ll[~long_ind] = np.inf
@@ -631,7 +635,7 @@ def sort_by_position(com):
         Returns:
             array: numpy array of indices that sort com """
 
-    n = 0.2 # resolution in microns
+    n = SMALLEST_SCALE # resolution in microns
     X = -np.floor(com/n)[:,0]*n
     Y = -np.floor(com/n)[:,1]*n
     return np.lexsort((X, Y))[::-1]
@@ -881,11 +885,12 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
         #  load dxf to dxfgrabber object
         dxf = dxfgrabber.readfile(file)
         all_layers = get_layer_names(dxf)
-        print('layers: ', all_layers)
+        print('layers: ', layers)
         
         ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin=origin)
         
-        f = open(file[:-4]+'_{0}.dc2'.format(str(int(time.time()*1e6))[-11:]), 'w')
+        id = '-'.join([l for l in layers if 'ALIGN' not in l])
+        f = open(file[:-4]+'_{0}.dc2'.format(id), 'w')
         
         write_header_dc2(f, ll, ur, layers)
     
@@ -921,6 +926,88 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
                     ind_sorted = sort_by_position(com)
                     write_layer_dc2(f, i+1, verts[ind_sorted], c)
         f.close()
+
+###################
+### Save as DXF ###
+###################
+
+def save_as_dxf(filename, layers, origin='ignore'):
+    """ Load dxf file(s), convert all objects to polygons, 
+        order elements by location, export dxf file.
+        
+        Args:
+            file (list): str (or list of str) containing filenames of dxf file(s)
+            layers (list) -- list of strings, layers to be included in .dc2 file(s)
+            
+        Kwargs:
+            origin (str): where the (0,0) coordinate should be located. 'lower' -- 
+                            lower left corner, 'center' -- center of drawing, 'ignore' --
+                            do not shift drawing
+                            
+        Returns: 
+            None """
+
+    try:
+        import ezdxf
+    except:
+        print('Must have ezdxf installed to save as .dxf')
+        return None
+
+    # some stuff to handle files or filelists
+    if type(filename)==type(''):
+        filename = [filename]
+    elif type(filename)==type([]):
+        pass
+    else:
+        print("Enter an string or list of strings")
+        
+    if type(layers)==type(''):
+        layers = [layers]
+    elif type(layers)==type([]):
+        pass
+    else:
+        print("Layers should be a string or list of strings")
+    
+    layers = [l.upper().replace(' ','_') for l in layers]
+    colors = np.arange(0,len(layers))+1
+    
+    # loop over multiple files
+    for file in filename:
+        print('working on file: {0}'.format(file))
+        
+        # create dxf drawing objects
+        dwg = ezdxf.new('AC1015')
+        msp = dwg.modelspace()
+        
+        # load dxf to dxfgrabber object
+        dxf = dxfgrabber.readfile(file)
+        all_layers = get_layer_names(dxf)
+        print('layers: ', layers)
+        
+        ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin=origin)
+    
+        # loop over layers
+        for i, l, c in zip(range(len(layers)), layers, colors):
+            if l in all_layers:
+                print(l)
+            
+                # define new layer in dxf
+                dwg.layers.new(name=l, dxfattribs={'color': c})
+
+                # import and sort vertices
+                verts = get_vertices(dxf, l)
+                verts = np.array([v+shift for v in verts]) 
+                com = polyUtility(verts, polyCOM)
+                ind_sorted = sort_by_position(com)
+                verts = verts[ind_sorted]
+                
+                for v in verts:
+                    msp.add_lwpolyline(v, dxfattribs={'layer':l})
+                
+            else:
+                print(l)
+                print('LAYER: {0}, NOT FOUND'.format(l))
+        dwg.saveas(file[:-4]+'_edited.dxf')
     
 ##########################
 ### Plotting functions ###
