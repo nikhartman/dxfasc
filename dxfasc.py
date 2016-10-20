@@ -6,9 +6,7 @@
     The package dxfgrabber is required for DXF read/write operations. 
     
     to do:
-        0. implement some sort of dose scaling/proximity correction?
-        1. split lines into squarish polygons? might be a problem with 
-           segments not aligning with one another. need to think about this.  """
+        0. implement some sort of dose scaling/proximity correction?  """
 
 import glob, itertools
 import numpy as np
@@ -19,8 +17,7 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 import warnings
 
-SMALLEST_SCALE = 5e-4 # distances smaller than this number are considered zero in most
-                      # calculations
+SMALLEST_SCALE = 5e-4 # um, distances smaller than this number are considered zero
 
 ##############################################
 ### Functions for dealing with layer names ###
@@ -365,11 +362,11 @@ def get_vertices(dxf, layer, warn=True):
     for ent in dxf.entities:
         if ent.layer.upper().replace(' ', '_') == layer:
             i+=1
-        
+            
             if ent.dxftype == 'POLYLINE':
                 poly_list.append(import_polygon_ent(ent))
             
-            if ent.dxftype == 'LWPOLYLINE':
+            elif ent.dxftype == 'LWPOLYLINE':
         
                 # logic to sort out what type of object ent is
                 closed = ent.is_closed # closed shape
@@ -563,28 +560,17 @@ def bounding_box(dxf, layers, origin='ignore'):
 ### Calculations to determine dose scaling ###
 ##############################################
 
-# def get_writefield(poly_list):
-#     """ Print the writefield size to the nearest micron. Similar to bounding_box, but
-#         does not import anything from the dxf directly.
-#         
-#         Args: 
-#             poly_list (list): list of 2D numpy arrays that contain x,y vertices defining polygons 
-#         
-#         Returns:
-#             bsize (float): writefield size in microns 
-#             center (float): center of writefield (x,y) """
-#             
-#     verts = np.vstack(poly_list)
+# the idea here was to write a function that scales the dose 
+# according to the width of the polygon, 
+# which is estimated from the vertex positions
+# see Nik's thesis for some details
+
+# def geometry_to_dose(verts, doseMin, doseMax):
+#     """ calculate approximate width of polygon. scale ebeam dose accordingly. """
 #     
-#     xmin = verts[:,0].min()
-#     xmax = verts[:,0].max()
-#     ymin = verts[:,1].min()
-#     ymax = verts[:,1].max()
-#     
-#     center = np.array([xmin+xmax, ymin+ymax])/2.0
-#     bsize = np.ceil(max(xmax-xmin, ymax-ymin))
-#     
-#     return bsize, center
+#     widths = 2*polyUtility(
+#                         polyverts, polyArea)/polyUtility(
+#                                             polyverts, polyPerimeter)
 
 # def geometry_to_dose(verts, doseMin, doseMax):
 #     """ takes an array of polygon vertices. returns and array of dose values calculated
@@ -608,17 +594,6 @@ def bounding_box(dxf, layers, origin='ignore'):
 #     #  clip data to within limits to make sure nothing gets a totally ridiculous dose
 #     #  round to nearest multiple of 'resolution' because this method can't be very accurate
 #     return np.clip(np.round(np.array([m*x + b for x in data])/resolution)*resolution, doseMin, doseMax)
-
-# def geometry_to_dose(verts, doseMin, doseMax):
-#     """ calculate approximate width of polygon. scale ebeam dose accordingly. """
-#     
-#     widths = 2*polyUtility(
-#                         polyverts, polyArea)/polyUtility(
-#                                             polyverts, polyPerimeter)
-    
-    # previous script gave everything over 2um doseMax
-    # everything under 280nm doseMin
-    # what to do now.... something simpler
 
 ######################################################
 ### Functions to define a write order for polygons ###
@@ -689,6 +664,10 @@ def write_layer_asc(f, poly_list, dose, layer, setDose=None):
             d = dose[i]
         f.write('1 {0:.3f} {1:d} \n'.format(d, layer))
         f.write(verts_block_asc(poly_list[i]) + '# \n')
+        
+# def process_files_for_raith():
+#     do not currently have a Raith system to test
+#     should look very similar to process_files_for_npgs
 
 ####################################
 ### DC2 output for NPGS software ###
@@ -877,7 +856,7 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
         print("Layers should be a string or list of strings")
     
     layers = [l.upper().replace(' ','_') for l in layers]
-    colors = (plt.cm.jet(np.linspace(0,1,len(layers)))[:,:-1]*256).astype(dtype='uint8')   
+    colors = (plt.cm.Accent(np.linspace(0,1,len(layers)))[:,:-1]*256).astype(dtype='uint8')   
     
     for file in filename:
         print('working on file: {0}'.format(file))
@@ -913,6 +892,7 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
                     align_layer_names = ['MARKER{0:d}'.format(i) for i in range(len(verts))]
                     write_header_dc2(af, ll, ur, align_layer_names) # write alignment file header
                     write_alignment_layers_dc2(af, verts, align_layer_names)
+                    print('alignment output: ' + file[:-4]+'_{0}.dc2'.format(l) + ', ' + file[:-4]+'_{0}.txt'.format(l))
                     af.close()
                     
                     # record vectors pointing from alignment mark 0 to others
@@ -925,6 +905,7 @@ def process_files_for_npgs(filename, layers, origin='ignore'):
                     com = polyUtility(verts, polyCOM)
                     ind_sorted = sort_by_position(com)
                     write_layer_dc2(f, i+1, verts[ind_sorted], c)
+        print('pattern output: ' + file[:-4]+'_{0}.dc2'.format(id))
         f.close()
 
 ###################
@@ -1024,7 +1005,7 @@ def plot_layers(ax, filename, layers, extent=None):
        
     dxf = dxfgrabber.readfile(filename)
 
-    poly_dict = import_multiple_layers(dxf, layers, warn=False)
+    poly_dict = import_multiple_layers(dxf, layers, warn=True)
     ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin='center')
 
     pmin = np.floor(ll.min()/10)*10
@@ -1034,7 +1015,13 @@ def plot_layers(ax, filename, layers, extent=None):
     for key, val in poly_dict.items():
         verts = np.array([v+shift for v in val])
         
+        if 'ALIGN' in key:
+            alpha = 0.5
+        else:
+            alpha = 1.0
+        
         polycol = PolyCollection(verts, facecolor=next(colors))
+        polycol.set_alpha(alpha)
         ax.add_collection(polycol)
 
         if extent:
