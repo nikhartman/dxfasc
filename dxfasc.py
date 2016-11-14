@@ -1038,8 +1038,7 @@ def plot_layers(ax, filename, layers, extent=None):
 ############################
 
 def estimate_writetime(filename, layer, dose, current):
-        """ Load dxf file(s), convert all objects to polygons, 
-        order elements by location, export dxf file.
+        """ Estimate write time for given layers.
         
         Args:
             filename (str): str containing filename of dxf file
@@ -1055,4 +1054,23 @@ def estimate_writetime(filename, layer, dose, current):
         total_area = polyUtility(verts, polyArea).sum() # areas are in um^2
         
         return (dose*(total_area*1e-8)/(current*1e-6))/60.0
+        
+def find_writefield_center(filename, layers, offset = (0,0)):
+        """ Locate the center of the writefield for given layers.
+            Results are given using the coordinates of the original drawing
+            unless offset != (0,0). In which case, center is (coordinates
+            of the drawing) - offset.
+        
+        Args:
+            filename (str): str containing filename of dxf file
+            layer (str) -- string or list of layer names
+                            
+        Returns: 
+            float: time to write patter in minutes """
+        dxf = dxfgrabber.readfile('mgaas5_qpcs.dxf')
+
+        *junk, center = bounding_box(dxf, layers, origin='center')
+        center = center - offset
+
+        print('center of writefield: {0:.1f},{1:.1f}'.format(-center[0],-center[1]))
 
