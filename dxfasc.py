@@ -1053,7 +1053,7 @@ def estimate_writetime(filename, layer, dose, current):
         verts = get_vertices(dxf, layer)
         total_area = polyUtility(verts, polyArea).sum() # areas are in um^2
         
-        return (dose*(total_area*1e-8)/(current*1e-6))/60.0
+        print('Time to write pattern: {0:.1f} min'.format((dose*(total_area*1e-8)/(current*1e-6))/60.0))
         
 def find_writefield_center(filename, layers, offset = (0,0)):
         """ Locate the center of the writefield for given layers.
@@ -1067,7 +1067,7 @@ def find_writefield_center(filename, layers, offset = (0,0)):
                             
         Returns: 
             float: time to write patter in minutes """
-        dxf = dxfgrabber.readfile('mgaas5_qpcs.dxf')
+        dxf = dxfgrabber.readfile(filename)
 
         *junk, center = bounding_box(dxf, layers, origin='center')
         center = center - offset
