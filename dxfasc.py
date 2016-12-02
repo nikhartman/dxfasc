@@ -1037,7 +1037,7 @@ def plot_layers(ax, filename, layers, extent=None):
 ### Additional Utilities ###
 ############################
 
-def estimate_writetime(filename, layer, dose, current):
+def estimate_writetime(filename, layers, dose, current):
         """ Estimate write time for given layers.
         
         Args:
@@ -1049,11 +1049,22 @@ def estimate_writetime(filename, layer, dose, current):
         Returns: 
             float: time to write patter in minutes """
         
-        dxf = dxfgrabber.readfile(filename)
-        verts = get_vertices(dxf, layer)
-        total_area = polyUtility(verts, polyArea).sum() # areas are in um^2
+        if type(layers)==type(''):
+            layers = [layers]
+        elif type(layers)==type([]):
+            pass
+        else:
+            print("Layers should be a string or list of strings")
+        layers = [l.upper().replace (" ", "_") for l in layers]
         
-        print('Time to write pattern: {0:.1f} min'.format((dose*(total_area*1e-8)/(current*1e-6))/60.0))
+        dxf = dxfgrabber.readfile(filename)
+        for layer in layers:
+            if 'ALIGN' in layer:
+                continue
+            verts = get_vertices(dxf, layer)
+            total_area = polyUtility(verts, polyArea).sum() # areas are in um^2
+        
+            print('Time to write {0}: {1:.1f} min'.format(layer, (dose*(total_area*1e-8)/(current*1e-6))/60.0))
         
 def find_writefield_center(filename, layers, offset = (0,0)):
         """ Locate the center of the writefield for given layers.
