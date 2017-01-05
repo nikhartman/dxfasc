@@ -180,7 +180,8 @@ def remove_duplicate_polygons(poly_list, warn=True):
             else:
                 if same_shape(poly_list[i], poly_list[j]):
                     if warn:
-                        print('DUPLICATE POLYGON REMOVED ({0})'.format(i))
+                        com = polyCOM(poly_list[i])
+                        print('DUPLICATE POLYGON REMOVED AT ({0:.1f}, {1:.1f})'.format(com[0],com[1]))
                     ind.append(i)
     return [vert for i, vert in enumerate(poly_list) if i not in ind]
     
