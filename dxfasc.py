@@ -465,40 +465,6 @@ def polyUtility(poly_list, polyFunc):
 ### Operations on multiple layers ###
 #####################################
     
-def import_multiple_layers(dxf, layers, warn=True):
-    """ Import multiple layers from dxf drawing into a dictionary.
-    
-        Args:
-            dxf (dxfgrabber object): obejct representing the dxf drawing
-            layers (list): str or list of string containing names of layers to import
-            
-        Kwargs: 
-            warn (bool): print warnings
-            
-        Returns:
-            dict: dictionary containing layer names as keys and polygon lists
-                  as values """
-                  
-    if type(layers)==type(''):
-        layers = [layers]
-    elif type(layers)==type([]):
-        pass
-    else:
-        print("Layers should be a string or list of strings")
-        
-    all_layers = get_layer_names(dxf) # get list of layers contained in dxf
-    layers = [l.upper().replace (" ", "_") for l in layers] # fix string formatting
-    
-    poly_dict = {}
-    for l in layers:
-        if l in all_layers:
-            poly_dict[l] = get_vertices(dxf, l, warn=warn)
-        else:
-            if warn:
-                print('LAYER: {0} NOT CONTAINED IN DXF'.format(l))
-                
-    return poly_dict
-    
 def vstack_all_vertices(poly_dict):
     """ All vertices in the layers contained in poly_dict are stacked to create one long
         list of x,y coordinates.
@@ -665,10 +631,6 @@ def write_layer_asc(f, poly_list, dose, layer, setDose=None):
             d = dose[i]
         f.write('1 {0:.3f} {1:d} \n'.format(d, layer))
         f.write(verts_block_asc(poly_list[i]) + '# \n')
-        
-# def process_files_for_raith():
-#     do not currently have a Raith system to test
-#     should look very similar to process_files_for_npgs
 
 ####################################
 ### DC2 output for NPGS software ###
@@ -824,173 +786,7 @@ def save_alignment_info(file, layername, poly_list):
         f.write(str(np.round(com*1000)/1000))
         f.write('\r\nVECTOR FROM MARKER 0: \r\n')
         f.write(str(np.round((com-com[0])*1000)/1000))
-    
-def process_files_for_npgs(filename, layers, origin='ignore'):
-    """ Load dxf file(s), convert all objects to polygons, 
-        order elements by location, export DC2 files.
-        
-        Args:
-            file (list): str (or list of str) containing filenames of dxf file(s)
-            layers (list) -- list of strings, layers to be included in .dc2 file(s)
-            
-        Kwargs:
-            origin (str): where the (0,0) coordinate should be located. 'lower' -- 
-                            lower left corner, 'center' -- center of drawing, 'ignore' --
-                            do not shift drawing
-                            
-        Returns: 
-            None """
 
-    # some stuff to handle files or filelists
-    if type(filename)==type(''):
-        filename = [filename]
-    elif type(filename)==type([]):
-        pass
-    else:
-        print("Enter an string or list of strings")
-        
-    if type(layers)==type(''):
-        layers = [layers]
-    elif type(layers)==type([]):
-        pass
-    else:
-        print("Layers should be a string or list of strings")
-    
-    layers = [l.upper().replace(' ','_') for l in layers]
-    colors = (plt.cm.Accent(np.linspace(0,1,len(layers)))[:,:-1]*256).astype(dtype='uint8')   
-    
-    for file in filename:
-        print('working on file: {0}'.format(file))
-        
-        #  load dxf to dxfgrabber object
-        dxf = dxfgrabber.readfile(file)
-        all_layers = get_layer_names(dxf)
-        print('layers: ', layers)
-        
-        ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin=origin)
-        
-        id = '-'.join([l for l in layers if 'ALIGN' not in l])
-        f = open(file[:-4]+'_{0}.dc2'.format(id), 'w')
-        
-        write_header_dc2(f, ll, ur, layers)
-    
-        for i, l, c in zip(range(len(layers)), layers, colors):
-            if l in all_layers:
-                if l=='0':
-                    # layer 0 is no good damn it!
-                    raise ValueError('DO NOT USE LAYER 0')
-                    
-                elif 'ALIGN' in l:
-                    # create list of objects for alignment marks
-                    verts = get_vertices(dxf, l)
-                    verts = np.array([v+shift for v in verts]) 
-                    com = polyUtility(verts, polyCOM)
-                    ind_sorted = sort_by_position(com)
-                    verts = verts[ind_sorted]
-                    
-                    # open file, write header
-                    af = open(file[:-4]+'_{0}.dc2'.format(l), 'w')
-                    align_layer_names = ['MARKER{0:d}'.format(i) for i in range(len(verts))]
-                    write_header_dc2(af, ll, ur, align_layer_names) # write alignment file header
-                    write_alignment_layers_dc2(af, verts, align_layer_names)
-                    print('alignment output: ' + file[:-4]+'_{0}.dc2'.format(l) + ', ' + file[:-4]+'_{0}.txt'.format(l))
-                    af.close()
-                    
-                    # record vectors pointing from alignment mark 0 to others
-                    save_alignment_info(file, l, verts)
-                    
-                else:
-                    # this is normal 
-                    verts = get_vertices(dxf, l)
-                    verts = np.array([v+shift for v in verts])
-                    com = polyUtility(verts, polyCOM)
-                    ind_sorted = sort_by_position(com)
-                    write_layer_dc2(f, i+1, verts[ind_sorted], c)
-        print('pattern output: ' + file[:-4]+'_{0}.dc2'.format(id))
-        f.close()
-
-###################
-### Save as DXF ###
-###################
-
-def save_as_dxf(filename, layers, origin='ignore'):
-    """ Load dxf file(s), convert all objects to polygons, 
-        order elements by location, export dxf file.
-        
-        Args:
-            file (list): str (or list of str) containing filenames of dxf file(s)
-            layers (list) -- list of strings, layers to be included in .dc2 file(s)
-            
-        Kwargs:
-            origin (str): where the (0,0) coordinate should be located. 'lower' -- 
-                            lower left corner, 'center' -- center of drawing, 'ignore' --
-                            do not shift drawing
-                            
-        Returns: 
-            None """
-
-    try:
-        import ezdxf
-    except:
-        print('Must have ezdxf installed to save as .dxf')
-        return None
-
-    # some stuff to handle files or filelists
-    if type(filename)==type(''):
-        filename = [filename]
-    elif type(filename)==type([]):
-        pass
-    else:
-        print("Enter an string or list of strings")
-        
-    if type(layers)==type(''):
-        layers = [layers]
-    elif type(layers)==type([]):
-        pass
-    else:
-        print("Layers should be a string or list of strings")
-    
-    layers = [l.upper().replace(' ','_') for l in layers]
-    colors = np.arange(0,len(layers))+1
-    
-    # loop over multiple files
-    for file in filename:
-        print('working on file: {0}'.format(file))
-        
-        # create dxf drawing objects
-        dwg = ezdxf.new('AC1015')
-        msp = dwg.modelspace()
-        
-        # load dxf to dxfgrabber object
-        dxf = dxfgrabber.readfile(file)
-        all_layers = get_layer_names(dxf)
-        print('layers: ', layers)
-        
-        ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin=origin)
-    
-        # loop over layers
-        for i, l, c in zip(range(len(layers)), layers, colors):
-            if l in all_layers:
-                print(l)
-            
-                # define new layer in dxf
-                dwg.layers.new(name=l, dxfattribs={'color': c})
-
-                # import and sort vertices
-                verts = get_vertices(dxf, l)
-                verts = np.array([v+shift for v in verts]) 
-                com = polyUtility(verts, polyCOM)
-                ind_sorted = sort_by_position(com)
-                verts = verts[ind_sorted]
-                
-                for v in verts:
-                    msp.add_lwpolyline(v, dxfattribs={'layer':l})
-                
-            else:
-                print(l)
-                print('LAYER: {0}, NOT FOUND'.format(l))
-        dwg.saveas(file[:-4]+'_edited.dxf')
-    
 ##########################
 ### Plotting functions ###
 ##########################
@@ -1034,11 +830,30 @@ def plot_layers(ax, filename, layers, extent=None):
         
         ax.grid('on')
         
-############################
-### Additional Utilities ###
-############################
+#############################################################################
+### Class to deal with importing/editing/exporting a few layers at a time ###
+#############################################################################
 
-def estimate_writetime(filename, layers, dose, current):
+class Layers()
+    """ class used to process layers for ebeam writing """
+    
+    def __init__(self, filename, layers):
+    
+        self.filename = filename
+        self.dxf = dxfgrabber.readfile(filename)
+        
+        if type(layers)==type(''):
+            layers = [layers]
+        elif type(layers)==type([]):
+            pass
+        else:
+            print("Layers should be a string or list of strings")
+
+        self.layers = [l.upper().replace (" ", "_") for l in layers] # fix string formatting
+        self.poly_dict = 
+        
+    def estimate_writetime(self, dose, current):
+        # fix this! 
         """ Estimate write time for given layers.
         
         Args:
@@ -1066,8 +881,10 @@ def estimate_writetime(filename, layers, dose, current):
             total_area = polyUtility(verts, polyArea).sum() # areas are in um^2
         
             print('Time to write {0}: {1:.1f} min'.format(layer, (dose*(total_area*1e-8)/(current*1e-6))/60.0))
-        
-def find_writefield_center(filename, layers, offset = (0,0)):
+            
+    def find_writefield_center(self, offset = (0,0)):
+    
+        # fix this! 
         """ Locate the center of the writefield for given layers.
             Results are given using the coordinates of the original drawing
             unless offset != (0,0). In which case, center is (coordinates
@@ -1085,4 +902,212 @@ def find_writefield_center(filename, layers, offset = (0,0)):
         center = center - offset
 
         print('center of writefield: {0:.1f},{1:.1f}'.format(-center[0],-center[1]))
+        
+    def plot(self, ax, extent=None):
+        # fix this! 
+        """ Plot the layers from filename on ax with bounds given by size. 
+    
+            Args:
+                ax (matplotlib.axes): axis on which the plot will appear
+                filename (dxf filename): name of file containing the drawing
+                layers (list): str or list of strings containing layer names
+                extent (list): [xmin, xmax, ymin, ymax] """
+       
+        dxf = dxfgrabber.readfile(filename)
 
+        poly_dict = import_multiple_layers(dxf, layers, warn=True)
+        ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin='center')
+
+        pmin = np.floor(ll.min()/10)*10
+        pmax = np.ceil(ur.max()/10)*10
+    
+        colors = itertools.cycle([plt.cm.Accent(i) for i in np.linspace(0, 1, 6)])
+        for key, val in poly_dict.items():
+            verts = np.array([v+shift for v in val])
+        
+            if 'ALIGN' in key:
+                alpha = 0.5
+            else:
+                alpha = 1.0
+        
+            polycol = PolyCollection(verts, facecolor=next(colors))
+            polycol.set_alpha(alpha)
+            ax.add_collection(polycol)
+
+            if extent:
+                ax.set_xlim(extent[0], extent[1])
+                ax.set_ylim(extent[2], extent[3])
+            else:
+                ax.set_xlim(pmin, pmax)
+                ax.set_ylim(pmin, pmax)
+        
+            ax.grid('on')
+            
+    def save_as_dxf(self, origin='ignore'):
+        # fix this
+        """ Load dxf file(s), convert all objects to polygons, 
+            order elements by location, export dxf file.
+        
+            Args:
+                file (list): str (or list of str) containing filenames of dxf file(s)
+                layers (list) -- list of strings, layers to be included in .dc2 file(s)
+            
+            Kwargs:
+                origin (str): where the (0,0) coordinate should be located. 'lower' -- 
+                                lower left corner, 'center' -- center of drawing, 'ignore' --
+                                do not shift drawing
+                            
+            Returns: 
+                None """
+
+        try:
+            import ezdxf
+        except:
+            print('Must have ezdxf installed to save as .dxf')
+            return None
+
+        # some stuff to handle files or filelists
+        if type(filename)==type(''):
+            filename = [filename]
+        elif type(filename)==type([]):
+            pass
+        else:
+            print("Enter an string or list of strings")
+        
+        if type(layers)==type(''):
+            layers = [layers]
+        elif type(layers)==type([]):
+            pass
+        else:
+            print("Layers should be a string or list of strings")
+    
+        layers = [l.upper().replace(' ','_') for l in layers]
+        colors = np.arange(0,len(layers))+1
+    
+        # loop over multiple files
+        for file in filename:
+            print('working on file: {0}'.format(file))
+        
+            # create dxf drawing objects
+            dwg = ezdxf.new('AC1015')
+            msp = dwg.modelspace()
+        
+            # load dxf to dxfgrabber object
+            dxf = dxfgrabber.readfile(file)
+            all_layers = get_layer_names(dxf)
+            print('layers: ', layers)
+        
+            ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin=origin)
+    
+            # loop over layers
+            for i, l, c in zip(range(len(layers)), layers, colors):
+                if l in all_layers:
+                    print(l)
+            
+                    # define new layer in dxf
+                    dwg.layers.new(name=l, dxfattribs={'color': c})
+
+                    # import and sort vertices
+                    verts = get_vertices(dxf, l)
+                    verts = np.array([v+shift for v in verts]) 
+                    com = polyUtility(verts, polyCOM)
+                    ind_sorted = sort_by_position(com)
+                    verts = verts[ind_sorted]
+                
+                    for v in verts:
+                        msp.add_lwpolyline(v, dxfattribs={'layer':l})
+                
+                else:
+                    print(l)
+                    print('LAYER: {0}, NOT FOUND'.format(l))
+            dwg.saveas(file[:-4]+'_edited.dxf')
+            
+    def process_files_for_npgs(self, sort_round = 0.0, origin='ignore'):
+        # fix this
+        """ order elements by location, export DC2 files
+        
+            Args:
+                file (list): str (or list of str) containing filenames of dxf file(s)
+                layers (list) -- list of strings, layers to be included in .dc2 file(s)
+            
+            Kwargs:
+                sort_round (float) = distance in microns to round polygon center points to
+                                    when sorting by location
+                origin (str): where the (0,0) coordinate should be located. 'lower' -- 
+                                lower left corner, 'center' -- center of drawing, 'ignore' --
+                                do not shift drawing
+                            
+            Returns: 
+                None """
+
+        # some stuff to handle files or filelists
+        if type(filename)==type(''):
+            filename = [filename]
+        elif type(filename)==type([]):
+            pass
+        else:
+            print("Enter an string or list of strings")
+        
+        if type(layers)==type(''):
+            layers = [layers]
+        elif type(layers)==type([]):
+            pass
+        else:
+            print("Layers should be a string or list of strings")
+    
+        layers = [l.upper().replace(' ','_') for l in layers]
+        colors = (plt.cm.Accent(np.linspace(0,1,len(layers)))[:,:-1]*256).astype(dtype='uint8')   
+    
+        for file in filename:
+            print('working on file: {0}'.format(file))
+        
+            #  load dxf to dxfgrabber object
+            dxf = dxfgrabber.readfile(file)
+            all_layers = get_layer_names(dxf)
+            print('layers: ', layers)
+        
+            ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin=origin)
+        
+            id = '-'.join([l for l in layers if 'ALIGN' not in l])
+            f = open(file[:-4]+'_{0}.dc2'.format(id), 'w')
+        
+            write_header_dc2(f, ll, ur, layers)
+    
+            for i, l, c in zip(range(len(layers)), layers, colors):
+                if l in all_layers:
+                    if l=='0':
+                        # layer 0 is no good damn it!
+                        raise ValueError('DO NOT USE LAYER 0')
+                    
+                    elif 'ALIGN' in l:
+                        # create list of objects for alignment marks
+                        verts = get_vertices(dxf, l)
+                        verts = np.array([v+shift for v in verts]) 
+                        com = polyUtility(verts, polyCOM)
+                        ind_sorted = sort_by_position(com)
+                        verts = verts[ind_sorted]
+                    
+                        # open file, write header
+                        af = open(file[:-4]+'_{0}.dc2'.format(l), 'w')
+                        align_layer_names = ['MARKER{0:d}'.format(i) for i in range(len(verts))]
+                        write_header_dc2(af, ll, ur, align_layer_names) # write alignment file header
+                        write_alignment_layers_dc2(af, verts, align_layer_names)
+                        print('alignment output: ' + file[:-4]+'_{0}.dc2'.format(l) + ', ' + file[:-4]+'_{0}.txt'.format(l))
+                        af.close()
+                    
+                        # record vectors pointing from alignment mark 0 to others
+                        save_alignment_info(file, l, verts)
+                    
+                    else:
+                        # this is normal 
+                        verts = get_vertices(dxf, l)
+                        verts = np.array([v+shift for v in verts])
+                        com = polyUtility(verts, polyCOM)
+                        ind_sorted = sort_by_position(com)
+                        write_layer_dc2(f, i+1, verts[ind_sorted], c)
+            print('pattern output: ' + file[:-4]+'_{0}.dc2'.format(id))
+            f.close()
+            
+#     def process_files_for_raith(self):
+#         do not currently have a Raith system to test
+#         should look very similar to process_files_for_npgs
