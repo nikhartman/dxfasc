@@ -1051,11 +1051,12 @@ class Layers:
             
             if 'ALIGN' in l:            
                 # open file, write header
-                af = open(file[:-4]+'_{0}.dc2'.format(l), 'w')
+                af = open(self.filename[:-4]+'_{0}.dc2'.format(l), 'w')
                 align_layer_names = ['MARKER{0:d}'.format(i) for i in range(len(verts))]
                 write_header_dc2(af, ll, ur, align_layer_names) # write alignment file header
                 write_alignment_layers_dc2(af, verts, align_layer_names)
-                print('alignment output: ' + self.filename[:-4]+'_{0}.dc2'.format(l) + ', ' + file[:-4]+'_{0}.txt'.format(l))
+                print('alignment output: ' + self.filename[:-4]+'_{0}.dc2'.format(l) + 
+                                          ', ' + self.filename[:-4]+'_{0}.txt'.format(l))
                 af.close()
             
                 # record vectors pointing from alignment mark 0 to others
