@@ -517,6 +517,43 @@ def vstack_all_vertices(poly_dict):
         verts[m:n] = np.vstack(val)
         m = n
     return verts
+    
+    
+def bounding_box(poly_dict, origin='ignore'):
+    """ Find bounding box and proper coordinates 
+
+        Args:
+            origin -- where the (0,0) coordinate should be located 
+        
+        Returns:
+            ll (np.array): x,y coordiates of lower left corner of drawing after shift
+            ur (np.array): x,y coordiates of upper right corner of drawing after shift
+            center (np.array): x,y coordinates of center point after shift
+            bsize (float): size of smallest bounding box (nearest micron)
+            shift (np.array): all x,y coordinates must be shifted by this vector """
+
+
+    verts = vstack_all_vertices(poly_dict)
+
+    xmin = verts[:,0].min()
+    xmax = verts[:,0].max()
+    ymin = verts[:,1].min()
+    ymax = verts[:,1].max()
+
+    ll = np.array([xmin, ymin])
+    ur = np.array([xmax, ymax])
+    center = np.array([xmin+xmax, ymin+ymax])/2.0
+    bsize = np.ceil(max(xmax-xmin, ymax-ymin))
+
+    if origin=='lower':
+        shift = (-1)*(center-bsize/2.0)
+        return ll+shift, ur+shift, center+shift, bsize, shift
+    elif origin=='center':
+        shift = (-1)*center
+        return ll+shift, ur+shift, center+shift, bsize, shift
+    else:
+        shift = np.array([0,0])
+        return ll, ur, center, bsize, shift
         
 ##############################################
 ### Calculations to determine dose scaling ###
@@ -797,35 +834,9 @@ def plot_layers(ax, filename, layers, extent=None):
             layers (list): str or list of strings containing layer names
             extent (list): [xmin, xmax, ymin, ymax] """
        
-    dxf = dxfgrabber.readfile(filename)
+    d = Layers(f, layers)
 
-    poly_dict = import_multiple_layers(dxf, layers, warn=True)
-    ll, ur, center, bsize, shift = bounding_box(dxf, layers, origin='center')
-
-    pmin = np.floor(ll.min()/10)*10
-    pmax = np.ceil(ur.max()/10)*10
-    
-    colors = itertools.cycle([plt.cm.Accent(i) for i in np.linspace(0, 1, 6)])
-    for key, val in poly_dict.items():
-        verts = np.array([v+shift for v in val])
-        
-        if 'ALIGN' in key:
-            alpha = 0.5
-        else:
-            alpha = 1.0
-        
-        polycol = PolyCollection(verts, facecolor=next(colors))
-        polycol.set_alpha(alpha)
-        ax.add_collection(polycol)
-
-        if extent:
-            ax.set_xlim(extent[0], extent[1])
-            ax.set_ylim(extent[2], extent[3])
-        else:
-            ax.set_xlim(pmin, pmax)
-            ax.set_ylim(pmin, pmax)
-        
-        ax.grid('on')
+    d.plot(ax, extent = extent)
         
 #############################################################################
 ### Class to deal with importing/editing/exporting a few layers at a time ###
@@ -874,42 +885,6 @@ class Layers:
         
             print('Time to write {0}: {1:.1f} min'.format(layer, (dose*(total_area*1e-8)/(current*1e-6))/60.0))
     
-    def bounding_box(self, origin='ignore'):
-        """ Find bounding box and proper coordinates 
-    
-            Args:
-                origin -- where the (0,0) coordinate should be located 
-            
-            Returns:
-                ll (np.array): x,y coordiates of lower left corner of drawing after shift
-                ur (np.array): x,y coordiates of upper right corner of drawing after shift
-                center (np.array): x,y coordinates of center point after shift
-                bsize (float): size of smallest bounding box (nearest micron)
-                shift (np.array): all x,y coordinates must be shifted by this vector """
-    
-    
-        verts = vstack_all_vertices(self.poly_dict)
-
-        xmin = verts[:,0].min()
-        xmax = verts[:,0].max()
-        ymin = verts[:,1].min()
-        ymax = verts[:,1].max()
-    
-        ll = np.array([xmin, ymin])
-        ur = np.array([xmax, ymax])
-        center = np.array([xmin+xmax, ymin+ymax])/2.0
-        bsize = np.ceil(max(xmax-xmin, ymax-ymin))
-
-        if origin=='lower':
-            shift = (-1)*(center-bsize/2.0)
-            return ll+shift, ur+shift, center+shift, bsize, shift
-        elif origin=='center':
-            shift = (-1)*center
-            return ll+shift, ur+shift, center+shift, bsize, shift
-        else:
-            shift = np.array([0,0])
-            return ll, ur, center, bsize, shift
-    
     def find_writefield_center(self, offset = (0,0)):
         """ Locate the center of the writefield for given layers.
             Results are given using the coordinates of the original drawing
@@ -920,7 +895,7 @@ class Layers:
             filename (str): str containing filename of dxf file
             layer (str) -- string or list of layer names """
 
-        *junk, center = self.bounding_box(origin='center')
+        *junk, center = bounding_box(self.poly_dict, origin='center')
         center = center - offset
 
         print('center of writefield: {0:.1f},{1:.1f}'.format(-center[0],-center[1]))
@@ -935,7 +910,7 @@ class Layers:
                 layers (list): str or list of strings containing layer names
                 extent (list): [xmin, xmax, ymin, ymax] """
 
-        ll, ur, center, bsize, shift = self.bounding_box(origin='center')
+        ll, ur, center, bsize, shift = bounding_box(self.poly_dict, origin='center')
 
         pmin = np.floor(ll.min()/10)*10
         pmax = np.ceil(ur.max()/10)*10
@@ -990,7 +965,7 @@ class Layers:
         dwg = ezdxf.new('AC1015')
         msp = dwg.modelspace()
     
-        ll, ur, center, bsize, shift = self.bounding_box(origin=origin)
+        ll, ur, center, bsize, shift = bounding_box(self.poly_dict, origin=origin)
 
         # loop over layers
         for i, l, c in zip(range(len(self.layers)), self.layers, colors):
@@ -1031,7 +1006,7 @@ class Layers:
     
         colors = (plt.cm.Accent(np.linspace(0,1,len(self.layers)))[:,:-1]*256).astype(dtype='uint8')   
         
-        ll, ur, center, bsize, shift = self.bounding_box(origin=origin)
+        ll, ur, center, bsize, shift = bounding_box(self.poly_dict, origin=origin)
     
         id = '-'.join([l for l in self.layers if 'ALIGN' not in l])
 
