@@ -11,7 +11,7 @@
 import glob, itertools
 import numpy as np
 import re
-import dxfgrabber
+import ezdxf
 import time
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
@@ -36,12 +36,12 @@ def get_layer_names(dxf):
             dxf (dxfgrabber object): dxfgrabber object refering to the drawing of interest 
         Returns:
             list (str): list of layer names """
-        
+            
     layers = ['0'] # this empty layer is required
     for i, ent in enumerate(dxf.entities):
-    
-        l = ent.layer.upper().replace (" ", "_")
-        
+
+        l = ent.dxf.layer.upper().replace (" ", "_")
+
         if i==0: 
             layers.append(l) # definitely add the first layer name
         elif l not in layers:
@@ -55,7 +55,7 @@ def print_layer_names(filename):
         Args: 
             filename (str): name of DXF file """
 
-    dxf = dxfgrabber.readfile(filename)
+    dxf = ezdxf.readfile(filename)
 
     layers = get_layer_names(dxf)
     for i, l in enumerate(layers):
@@ -64,18 +64,6 @@ def print_layer_names(filename):
 ##################################################################################
 ### Functions to normalize a list of DXF shapes into a standard polygon format ###
 ##################################################################################
-
-def strip_z(tuple_list):
-    """ Removes the unnecessary z component from tuples. Specifically a problem
-        with Adobe Illustrator imports. 
-        
-        Args:
-            tuple_list (list): a list of tuples in (x,y,z) or (x,y) form 
-
-        Returns:
-            list: a list of tuples in (x,y) form """
-        
-    return [t[0:2] for t in tuple_list]
     
 def remove_duplicate_vertices(verts):
     """ Look for duplicate points (closing point excluded) in lists of polygon vertices.
@@ -86,12 +74,12 @@ def remove_duplicate_vertices(verts):
         Returns 
             np.ndarray: modified verts with duplicate points removed """
             
-    eps = SMALLEST_SCALE 
+    eps = 5e-4
     idx = np.ones(verts.shape, dtype=bool)
     idx[0:-1] = (np.abs(verts - np.roll(verts,-1, axis=0))>eps)[0:-1]
     return verts[np.logical_or(idx[:,0],idx[:,1])]
     
-def import_polygon_ent(ent):
+def import_polyline(ent):
     """ A fucntion to import polygon entities from a drawing. Remove z coordinates, 
         convert list to numpy array, remove any duplicate vertices.
         
@@ -101,21 +89,52 @@ def import_polygon_ent(ent):
         Returns
             np.ndarray: list of x,y coordinates for polygon vertices """
             
-    pnts = ent.points
-    verts = np.array(strip_z(ent.points))
-    return remove_duplicate_vertices(verts)
+    with ent.points() as pnts:
+        verts = np.array(pnts)
+        return remove_duplicate_vertices(pnts[:,0:2])
+        
+def import_lwpolyline(ent):
+
+    with ent.points() as pnts:
+        
+        # logic to sort out what type of object ent is
+        closed = ent.closed # closed shape
+        
+        if ent.width.__len__()==0:
+            width=False # not variable width
+        else:
+            width = not all([t<0.001 for tt in ent.width for t in tt]) # may be variable width
+        cwidth = ent.const_width>0.001 # constant width
+
+        if (closed and not (width or cwidth)): # closed polygons, lines have no width
+            poly_list.append(import_polygon_ent(ent))
+        elif (cwidth and not (closed or width)): # lines with constant width
+            line = line2poly_const(ent)
+            if line is not None:
+                poly_list += split_line2poly(line)
+        elif (width and not (closed or cwidth)):
+            if warn:
+                print('ENTITY ({0}). Lines of variable width not supported. DXFTYPE = LWPOLYLINE.'.format(i))
+        elif (not width and not cwidth and not closed):
+            # if closed, cwidth, and width are all false it's an unclosed polygon
+            # add it to the list and fix it later
+            poly_list.append(import_polygon_ent(ent))
     
-def contains_closing_point(verts):
-    """ Check that the polygon described by verts contains
-        a closing point.
-        
-        Args:
-            verts (list): a list of vertices in the form np.array([x,y])
-        Returns:
-            bool: True if verts contains a closing point. False otherwise. """
-        
-    eps = SMALLEST_SCALE # anything within 5A is the same point
-    return np.all([abs(v)<eps for v in verts[0]-verts[-1]])
+        else:
+            if warn:
+                print('UKNOWN ENTITY ({0}). DXFTYPE = LWPOLYLINE'.format(i))
+    
+# def contains_closing_point(verts):
+#     """ Check that the polygon described by verts contains
+#         a closing point.
+#         
+#         Args:
+#             verts (list): a list of vertices in the form np.array([x,y])
+#         Returns:
+#             bool: True if verts contains a closing point. False otherwise. """
+#         
+#     eps = SMALLEST_SCALE # anything within 5A is the same point
+#     return np.all([abs(v)<eps for v in verts[0]-verts[-1]])
         
 def close_all_polygons(poly_list, warn = True):
     """ Go through poly_list and look for polygons that are not closed
@@ -361,45 +380,20 @@ def get_vertices(dxf, layer, warn=True):
         return poly_list
      
     for ent in dxf.entities:
-        if ent.layer.upper().replace(' ', '_') == layer:
+        if ent.dxf.layer.upper().replace(' ', '_') == layer:
             i+=1
             
-            if ent.dxftype == 'POLYLINE':
-                poly_list.append(import_polygon_ent(ent))
+            if ent.dxftype() == 'POLYLINE':
+                poly_list.append(import_polyline(ent))
             
-            elif ent.dxftype == 'LWPOLYLINE':
-        
-                # logic to sort out what type of object ent is
-                closed = ent.is_closed # closed shape
-                if ent.width.__len__()==0:
-                    width=False # not variable width
-                else:
-                    width = not all([t<0.001 for tt in ent.width for t in tt]) # may be variable width
-                cwidth = ent.const_width>0.001 # constant width
-        
-                if (closed and not (width or cwidth)): # closed polygons, lines have no width
-                    poly_list.append(import_polygon_ent(ent))
-                elif (cwidth and not (closed or width)): # lines with constant width
-                    line = line2poly_const(ent)
-                    if line is not None:
-                        poly_list += split_line2poly(line)
-                elif (width and not (closed or cwidth)):
-                    if warn:
-                        print('ENTITY ({0}). Lines of variable width not supported. DXFTYPE = LWPOLYLINE.'.format(i))
-                elif (not width and not cwidth and not closed):
-                    # if closed, cwidth, and width are all false it's an unclosed polygon
-                    # add it to the list and fix it later
-                    poly_list.append(import_polygon_ent(ent))
-                
-                else:
-                    if warn:
-                        print('UKNOWN ENTITY ({0}). DXFTYPE = LWPOLYLINE'.format(i))
+            elif ent.dxftype() == 'LWPOLYLINE':
+                poly_list.append(import_lwpolyline(ent))
                         
             # add additional dxftypes here
                 
             else:
                 if warn:
-                    print('NOT A KNOWN TYPE ({0}) -- LAYER: {1}'.format(ent.dxftype, layer))
+                    print('NOT A KNOWN TYPE ({0}) -- LAYER: {1}'.format(ent.dxftype(), layer))
     
     poly_list = close_all_polygons(poly_list, warn=warn) # make sure all polygons are closed
     poly_list = remove_duplicate_polygons(poly_list, warn=warn) # remove duplicates
@@ -848,7 +842,7 @@ class Layers:
     def __init__(self, filename, layers):
     
         self.filename = filename
-        self.dxf = dxfgrabber.readfile(filename)
+        self.dxf = ezdxf.readfile(filename)
         
         if type(layers)==type(''):
             layers = [layers]
