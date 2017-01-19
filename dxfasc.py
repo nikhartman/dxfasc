@@ -900,6 +900,7 @@ class Layers:
 
         print('center of writefield: {0:.1f},{1:.1f}'.format(-center[0],-center[1]))
         self.writefield_center = center
+        return(center)
         
     def plot(self, ax, extent=None):
         """ Plot the layers from filename on ax with bounds given by size. 
@@ -1012,8 +1013,7 @@ class Layers:
 
         if id != '':
             f = open(self.filename[:-4]+'_{0}.dc2'.format(id), 'w')
-    
-        write_header_dc2(f, ll, ur, self.layers)
+            write_header_dc2(f, ll, ur, self.layers)
 
         for i, l, c in zip(range(len(self.layers)), self.layers, colors):
         
@@ -1040,8 +1040,9 @@ class Layers:
             else:
                 write_layer_dc2(f, i+1, verts, c)
                 
-        print('pattern output: ' + self.filename[:-4]+'_{0}.dc2'.format(id))
-        f.close()
+        if id != '':
+            print('pattern output: ' + self.filename[:-4]+'_{0}.dc2'.format(id))
+            f.close()
             
 #     def process_files_for_raith(self):
 #         do not currently have a Raith system to test
