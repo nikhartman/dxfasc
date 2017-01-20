@@ -74,12 +74,12 @@ def remove_duplicate_vertices(verts):
         Returns 
             np.ndarray: modified verts with duplicate points removed """
             
-    eps = 5e-4
+    eps = SMALLEST_SCALE
     idx = np.ones(verts.shape, dtype=bool)
     idx[0:-1] = (np.abs(verts - np.roll(verts,-1, axis=0))>eps)[0:-1]
     return verts[np.logical_or(idx[:,0],idx[:,1])]
     
-def import_polyline(ent):
+def import_polyline(ent, warn=True):
     """ A fucntion to import polygon entities from a drawing. Remove z coordinates, 
         convert list to numpy array, remove any duplicate vertices.
         
@@ -91,50 +91,62 @@ def import_polyline(ent):
             
     with ent.points() as pnts:
         verts = np.array(pnts)
-        return remove_duplicate_vertices(pnts[:,0:2])
+        return [remove_duplicate_vertices(verts[:,0:2])]
         
-def import_lwpolyline(ent):
+def import_lwpolyline(ent, split_lines=True, warn=True):
+    # should always return a list of numpy.ndarrays, even if there is only one list element
 
     with ent.points() as pnts:
+        verts = np.array(pnts)
         
-        # logic to sort out what type of object ent is
-        closed = ent.closed # closed shape
+    # logic to sort out what type of object ent is
+    closed = ent.closed # true if shape is closed
+    
+    if(ent.dxf.const_width>SMALLEST_SCALE):
+        const_width = True # ent.dxf.const_width is the global linewidth
+        width = ent.dxf.const_width
+    elif(np.count_nonzero(abs(verts[:,2:4].flatten()-verts[0,2]) > SMALLEST_SCALE)==0):
+        # if all of the elements in columns 2+3 of verts are equal
+        # this is a line of constant width (could be width=0)
+        const_width = True
+        width = verts[0,2]
+    elif(np.count_nonzero(abs(verts[:,2:4].flatten()-verts[0,2]) > SMALLEST_SCALE) > 0):
+        # this is a line of variable width
+        const_width = False
+        width = np.nan
+        if warn:
+            print('VARIABLE WIDTH POLYLINES NOT SUPPORTED. DXFTYPE = LWPOLYLINE. {0}'.format(verts[:,0:2]))
+        return []
+    
+    verts = verts[:,0:2] # strip the width information now that we know it
+    
+    if (width<SMALLEST_SCALE and closed): 
+        # closed polygons, lines have no width
+        # return vertices as they are without the closing point
+        return [remove_duplicate_vertices(verts)]
+    elif (width<SMALLEST_SCALE and not closed):
+        # most likely an unclosed polygon
+        # add it and it will be fixed later.
+        return remove_duplicate_vertices(verts)
+    elif (width>SMALLEST_SCALE and not closed): # lines with constant width
+        verts = line2poly_const(verts, width)
+        if verts is not None:
+            if split_lines:
+                return split_line2poly(verts)
+            else:
+                return [verts]
+    
+def contains_closing_point(verts):
+    """ Check that the polygon described by verts contains
+        a closing point.
         
-        if ent.width.__len__()==0:
-            width=False # not variable width
-        else:
-            width = not all([t<0.001 for tt in ent.width for t in tt]) # may be variable width
-        cwidth = ent.const_width>0.001 # constant width
-
-        if (closed and not (width or cwidth)): # closed polygons, lines have no width
-            poly_list.append(import_polygon_ent(ent))
-        elif (cwidth and not (closed or width)): # lines with constant width
-            line = line2poly_const(ent)
-            if line is not None:
-                poly_list += split_line2poly(line)
-        elif (width and not (closed or cwidth)):
-            if warn:
-                print('ENTITY ({0}). Lines of variable width not supported. DXFTYPE = LWPOLYLINE.'.format(i))
-        elif (not width and not cwidth and not closed):
-            # if closed, cwidth, and width are all false it's an unclosed polygon
-            # add it to the list and fix it later
-            poly_list.append(import_polygon_ent(ent))
-    
-        else:
-            if warn:
-                print('UKNOWN ENTITY ({0}). DXFTYPE = LWPOLYLINE'.format(i))
-    
-# def contains_closing_point(verts):
-#     """ Check that the polygon described by verts contains
-#         a closing point.
-#         
-#         Args:
-#             verts (list): a list of vertices in the form np.array([x,y])
-#         Returns:
-#             bool: True if verts contains a closing point. False otherwise. """
-#         
-#     eps = SMALLEST_SCALE # anything within 5A is the same point
-#     return np.all([abs(v)<eps for v in verts[0]-verts[-1]])
+        Args:
+            verts (list): a list of vertices in the form np.array([x,y])
+        Returns:
+            bool: True if verts contains a closing point. False otherwise. """
+        
+    eps = SMALLEST_SCALE # anything within 5A is the same point
+    return np.all([abs(v)<eps for v in verts[0]-verts[-1]])
         
 def close_all_polygons(poly_list, warn = True):
     """ Go through poly_list and look for polygons that are not closed
@@ -257,19 +269,17 @@ def choose_scan_side(poly_list):
             
     return [rotate_to_longest_side(vert) for vert in poly_list]
 
-def line2poly_const(ent, warn=True):
+def line2poly_const(centers, width, warn=True):
     """ Convert lines of constant width to filled polygons. 
     
         Args:
-            ent (dxfgrabber entity): an object representing a single line in the DXF pattern
+            centers (array of tuples): vertices defining center of line
+            width (float): width of line
         Returns:
-            list (verts): a list of vertices defining the polygon that is equivalent to the 
-                line of constant width. Vertices are in the form [np.array([x,y])] """
+            np.ndarray: list of x,y coordinates for polygon vertices """
     
-    centers = import_polygon_ent(ent) # center points of line
     lower = np.zeros(centers.shape) # to hold vertices for lower parallel line
     upper = np.zeros(centers.shape) # to hold vertices for upper parallel line
-    width = ent.const_width # line width
 
     diff = np.roll(centers,-1, axis=0)-centers # vectors representing each line segement
     phi = np.arctan2(diff[:,1],diff[:,0]) # angle each line segment makes with x-axis
@@ -284,7 +294,7 @@ def line2poly_const(ent, warn=True):
         warnings.filterwarnings('error')
     
         try:
-            for i in range(1,ent.__len__()-1):
+            for i in range(1,len(centers)-1):
                 if np.abs(m[i])<eps:
                     a = m[i]
                     bl = b_lower[i]
@@ -313,7 +323,7 @@ def line2poly_const(ent, warn=True):
     
         except Warning:
             if warn:
-                print('LINE CONVERSION FAILED. OMITTED FROM DC2.')
+                print('LINE CONVERSION FAILED. {0}'.format(verts[:,0:2]))
             return None
             
 def split_line2poly(verts):
@@ -384,10 +394,10 @@ def get_vertices(dxf, layer, warn=True):
             i+=1
             
             if ent.dxftype() == 'POLYLINE':
-                poly_list.append(import_polyline(ent))
+                poly_list += import_polyline(ent)
             
             elif ent.dxftype() == 'LWPOLYLINE':
-                poly_list.append(import_lwpolyline(ent))
+                poly_list += import_lwpolyline(ent)
                         
             # add additional dxftypes here
                 
@@ -946,12 +956,6 @@ class Layers:
                             
             Returns: 
                 None """
-
-        try:
-            import ezdxf
-        except:
-            print('Must have ezdxf installed to save as .dxf')
-            return None
     
         colors = np.arange(0,len(self.layers))+1
 
