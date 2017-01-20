@@ -9,5 +9,5 @@ setup(name = 'dxfasc',
       author_email = 'nik.hartman@gmail.com',
       url = 'https://github.com/nikhartman/dxfasc',
       py_modules = ['dxfasc'],
-      install_requires = ['dxfgrabber']
+      install_requires = ['ezdxf', 'numpy', 'matplotlib']
       )
